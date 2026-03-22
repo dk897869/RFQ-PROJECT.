@@ -1,13 +1,13 @@
 const router = require("express").Router();
-const Vendor = require("../models/vendor");
+const Part = require("../models/part");
 
 router.get("/", async(req,res)=>{
-  const data = await Vendor.find();
+  const data = await Part.find();
   res.json(data);
 });
 
 router.post("/", async(req,res)=>{
-  const data = await Vendor.create(req.body);
+  const data = await Part.create(req.body);
   res.json(data);
 });
 
