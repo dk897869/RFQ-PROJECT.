@@ -93,10 +93,13 @@ exports.register = async (req, res) => {
 /* ================= LOGIN ================= */
 
 exports.login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
+  console.log("🔥 LOGIN HIT");
+  console.log("BODY:", req.body);
 
-    // ✅ VALIDATION
+  try {
+    // Safely read body
+    const { email, password } = req.body || {};
+
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -104,7 +107,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ✅ FIND USER
     const user = await User.findOne({ email });
 
     if (!user) {
@@ -114,7 +116,11 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ✅ PASSWORD MATCH
+    // Guard against missing password in DB
+    if (!user.password) {
+      throw new Error("User password missing in DB");
+    }
+
     const match = await bcrypt.compare(password, user.password);
 
     if (!match) {
@@ -124,7 +130,11 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 🔥 ALWAYS GENERATE NEW TOKEN
+    // Guard JWT secret
+    if (!process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET missing");
+    }
+
     const token = jwt.sign(
       {
         id: user._id,
@@ -135,7 +145,7 @@ exports.login = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES || "1d" }
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Login successful",
       token,
@@ -148,11 +158,11 @@ exports.login = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("LOGIN ERROR:", error);
+    console.error("❌ LOGIN ERROR FULL:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Server error"
+      message: error.message || "Server error"
     });
   }
 };
