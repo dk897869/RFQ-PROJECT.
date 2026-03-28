@@ -1,14 +1,21 @@
-const router = require("express").Router();
-const Vendor = require("../models/vendor");
+const express = require("express");
+const router = express.Router();
 
-router.get("/", async(req,res)=>{
-  const data = await Vendor.find();
-  res.json(data);
-});
+const vendorController = require("../controllers/vendor.controller");
+const { verifyToken } = require("../middlewares/auth");
 
-router.post("/", async(req,res)=>{
-  const data = await Vendor.create(req.body);
-  res.json(data);
-});
+// ====================== FULL CRUD ======================
+
+// GET All Vendors
+router.get("/", verifyToken, vendorController.getVendors);
+
+// CREATE New Vendor
+router.post("/", verifyToken, vendorController.addVendor);
+
+// UPDATE Vendor
+router.put("/:id", verifyToken, vendorController.updateVendor);
+
+// DELETE Vendor
+router.delete("/:id", verifyToken, vendorController.deleteVendor);
 
 module.exports = router;

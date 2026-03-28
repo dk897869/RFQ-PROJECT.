@@ -1,14 +1,21 @@
-const router = require("express").Router();
-const Part = require("../models/part");
+const express = require("express");
+const router = express.Router();
 
-router.get("/", async(req,res)=>{
-  const data = await Part.find();
-  res.json(data);
-});
+const partController = require("../controllers/part.controller");
+const { verifyToken } = require("../middlewares/auth");
 
-router.post("/", async(req,res)=>{
-  const data = await Part.create(req.body);
-  res.json(data);
-});
+// ====================== FULL CRUD ======================
+
+// GET All Parts
+router.get("/", verifyToken, partController.getParts);
+
+// CREATE New Part
+router.post("/", verifyToken, partController.addPart);
+
+// UPDATE Part
+router.put("/:id", verifyToken, partController.updatePart);
+
+// DELETE Part
+router.delete("/:id", verifyToken, partController.deletePart);
 
 module.exports = router;

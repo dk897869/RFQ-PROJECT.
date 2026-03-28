@@ -1,16 +1,43 @@
 const Vendor = require("../models/vendor");
 
-exports.create = async (req, res) => {
-  const vendor = await Vendor.create(req.body);
-  res.json(vendor);
+// GET All Vendors
+exports.getVendors = async (req, res) => {
+  try {
+    const vendors = await Vendor.find().sort({ createdAt: -1 });
+    res.json({ success: true, data: vendors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
-exports.getAll = async (req, res) => {
-  const vendors = await Vendor.find();
-  res.json(vendors);
+// CREATE Vendor
+exports.addVendor = async (req, res) => {
+  try {
+    const vendor = await Vendor.create(req.body);
+    res.status(201).json({ success: true, message: "Vendor added", data: vendor });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
 };
 
-exports.delete = async (req, res) => {
-  await Vendor.findByIdAndDelete(req.params.id);
-  res.json({ message: "Vendor deleted" });
+// UPDATE Vendor
+exports.updateVendor = async (req, res) => {
+  try {
+    const vendor = await Vendor.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+    res.json({ success: true, message: "Vendor updated", data: vendor });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// DELETE Vendor
+exports.deleteVendor = async (req, res) => {
+  try {
+    const vendor = await Vendor.findByIdAndDelete(req.params.id);
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+    res.json({ success: true, message: "Vendor deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 };

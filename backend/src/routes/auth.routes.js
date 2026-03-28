@@ -1,18 +1,35 @@
 const express = require("express");
 const router = express.Router();
 
+// ✅ Import Controllers
 const authController = require("../controllers/auth.controller");
+
+// ✅ Import Middleware (using your existing verifyToken)
 const { verifyToken } = require("../middlewares/auth");
 
-/* ================= AUTH ================= */
+/* ================= AUTH ROUTES ================= */
 
-// Register
+// ====================== PUBLIC ROUTES ======================
+
+// Register New User
 router.post("/register", authController.register);
 
-// Login
+// Traditional Login (Email + Password)
 router.post("/login", authController.login);
 
-// Get current logged-in user (Protected)
-router.get("/me", verifyToken, authController.getMe);
+// Send OTP for Login
+router.post("/send-otp", authController.sendOTP);
+
+// Verify OTP and Login
+router.post("/login-otp", authController.loginWithOTP);
+
+// ====================== PROTECTED ROUTES ======================
+
+// Get Current Logged-in User
+router.get(
+  "/me",
+  verifyToken,           // Using your existing middleware
+  authController.getMe
+);
 
 module.exports = router;
