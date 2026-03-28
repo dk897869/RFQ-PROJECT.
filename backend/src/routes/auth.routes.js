@@ -20,15 +20,15 @@ router.post("/login", authController.login);
 // Send OTP for Login
 router.post("/send-otp", authController.sendOTP);
 
-// Verify OTP and Login
-router.post("/login-otp", authController.loginWithOTP);
+// Verify OTP and Login (Fixed endpoint to match frontend)
+router.post("/verify-otp", authController.loginWithOTP);
 
 // ====================== PROTECTED ROUTES ======================
 
 // Get Current Logged-in User
 router.get(
   "/me",
-  verifyToken,           // Using your existing middleware
+  verifyToken,
   authController.getMe
 );
 
