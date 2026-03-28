@@ -1,5 +1,5 @@
 const User = require("../models/user");
-const OTP = require("../models/otp");           // ← New
+const OTP = require("../models/otp");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
@@ -62,7 +62,6 @@ exports.register = async (req, res) => {
 
     await user.save();
 
-    // Auto generate token after registration (good UX)
     const token = jwt.sign(
       { id: user._id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
@@ -104,7 +103,6 @@ exports.sendOTP = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not registered with this email" });
     }
 
-    // Generate 6-digit OTP
     const otp = otpGenerator.generate(6, {
       digits: true,
       alphabets: false,
@@ -112,17 +110,14 @@ exports.sendOTP = async (req, res) => {
       specialChars: false
     });
 
-    // Remove old OTP if exists
     await OTP.findOneAndDelete({ email: email.toLowerCase() });
 
-    // Save new OTP (valid for 10 minutes)
     await OTP.create({
       email: email.toLowerCase(),
       otp,
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
 
-    // Send OTP via Email
     await transporter.sendMail({
       from: process.env.SMTP_MAIL,
       to: email,
@@ -170,7 +165,6 @@ exports.loginWithOTP = async (req, res) => {
       return res.status(400).json({ success: false, message: "OTP has expired. Request new OTP" });
     }
 
-    // OTP is valid → Login user
     const user = await User.findOne({ email: email.toLowerCase() }).select("-password");
 
     if (!user) {
@@ -183,7 +177,6 @@ exports.loginWithOTP = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES || "7d" }
     );
 
-    // Delete used OTP
     await OTP.deleteOne({ email: email.toLowerCase() });
 
     res.json({
@@ -283,6 +276,7 @@ exports.getMe = async (req, res) => {
       user
     });
   } catch (error) {
+    console.error("Get Me Error:", error);
     res.status(500).json({
       success: false,
       message: "Server error"

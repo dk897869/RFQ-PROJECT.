@@ -1,24 +1,27 @@
 const express = require("express");
 const router = express.Router();
 
-const requestController = require("../controllers/request.controller");
+const vendorController = require("../controllers/vendor.controller");
 const { verifyToken } = require("../middlewares/auth");
 
 // ====================== FULL CRUD ======================
 
-// GET All EP Requests
-router.get("/", verifyToken, requestController.getRequests);
+// GET All Vendors
+router.get("/", verifyToken, vendorController.getVendors);
 
-// CREATE New EP Request
-router.post("/", verifyToken, requestController.createRequest);
+// GET Single Vendor by ID
+router.get("/:id", verifyToken, vendorController.getVendorById);
 
-// GET Single Request by ID
-router.get("/:id", verifyToken, requestController.getRequestById);
+// CREATE New Vendor
+router.post("/", verifyToken, vendorController.addVendor);
 
-// UPDATE Request
-router.put("/:id", verifyToken, requestController.updateRequest);
+// UPDATE Vendor (Full Update)
+router.put("/:id", verifyToken, vendorController.updateVendor);
 
-// DELETE Request
-router.delete("/:id", verifyToken, requestController.deleteRequest);
+// PATCH - Update Vendor Status
+router.patch("/:id/status", verifyToken, vendorController.updateVendorStatus);
+
+// DELETE Vendor
+router.delete("/:id", verifyToken, vendorController.deleteVendor);
 
 module.exports = router;

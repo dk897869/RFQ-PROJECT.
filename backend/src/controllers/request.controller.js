@@ -6,7 +6,8 @@ exports.getRequests = async (req, res) => {
     const requests = await Request.find().sort({ createdAt: -1 });
     res.json({
       success: true,
-      data: requests
+      data: requests,
+      count: requests.length
     });
   } catch (error) {
     console.error("Get Requests Error:", error);
@@ -20,7 +21,14 @@ exports.getRequests = async (req, res) => {
 // CREATE New EP Request
 exports.createRequest = async (req, res) => {
   try {
-    const newRequest = await Request.create(req.body);
+    const requestData = {
+      ...req.body,
+      status: req.body.status || "Pending",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const newRequest = await Request.create(requestData);
     res.status(201).json({
       success: true,
       message: "EP Request created successfully",
@@ -44,24 +52,154 @@ exports.getRequestById = async (req, res) => {
     }
     res.json({ success: true, data: request });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Get Request By ID Error:", error);
+    
+    if (error.name === "CastError") {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid request ID format" 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: "Server error" 
+    });
   }
 };
 
 // UPDATE Request
 exports.updateRequest = async (req, res) => {
   try {
+    const updateData = {
+      ...req.body,
+      updatedAt: new Date()
+    };
+    
     const updated = await Request.findByIdAndUpdate(
       req.params.id, 
-      req.body, 
+      updateData, 
       { new: true, runValidators: true }
     );
+    
     if (!updated) {
-      return res.status(404).json({ success: false, message: "Request not found" });
+      return res.status(404).json({ 
+        success: false, 
+        message: "Request not found" 
+      });
     }
-    res.json({ success: true, message: "Request updated", data: updated });
+    
+    res.json({ 
+      success: true, 
+      message: "Request updated", 
+      data: updated 
+    });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    console.error("Update Request Error:", error);
+    
+    if (error.name === "CastError") {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid request ID format" 
+      });
+    }
+    
+    res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+// Approve Request
+exports.approveRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { comments } = req.body;
+    
+    const approvedRequest = await Request.findByIdAndUpdate(
+      id,
+      {
+        status: "Approved",
+        approvedAt: new Date(),
+        approvalComments: comments || "",
+        updatedAt: new Date()
+      },
+      { new: true, runValidators: true }
+    );
+    
+    if (!approvedRequest) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Request not found" 
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: "Request approved successfully",
+      data: approvedRequest
+    });
+  } catch (error) {
+    console.error("Approve Request Error:", error);
+    
+    if (error.name === "CastError") {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid request ID format" 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || "Failed to approve request" 
+    });
+  }
+};
+
+// Reject Request
+exports.rejectRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { comments } = req.body;
+    
+    const rejectedRequest = await Request.findByIdAndUpdate(
+      id,
+      {
+        status: "Rejected",
+        rejectedAt: new Date(),
+        rejectionReason: comments || "",
+        updatedAt: new Date()
+      },
+      { new: true, runValidators: true }
+    );
+    
+    if (!rejectedRequest) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Request not found" 
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: "Request rejected successfully",
+      data: rejectedRequest
+    });
+  } catch (error) {
+    console.error("Reject Request Error:", error);
+    
+    if (error.name === "CastError") {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid request ID format" 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || "Failed to reject request" 
+    });
   }
 };
 
@@ -70,10 +208,28 @@ exports.deleteRequest = async (req, res) => {
   try {
     const request = await Request.findByIdAndDelete(req.params.id);
     if (!request) {
-      return res.status(404).json({ success: false, message: "Request not found" });
+      return res.status(404).json({ 
+        success: false, 
+        message: "Request not found" 
+      });
     }
-    res.json({ success: true, message: "Request deleted successfully" });
+    res.json({ 
+      success: true, 
+      message: "Request deleted successfully" 
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Delete Request Error:", error);
+    
+    if (error.name === "CastError") {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid request ID format" 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 };

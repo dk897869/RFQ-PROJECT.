@@ -18,16 +18,26 @@ const app = express();
 connectDB();
 
 /* ================= MIDDLEWARE ================= */
+// CORS middleware - This handles OPTIONS preflight automatically
 app.use(cors({
   origin: "*",
-  methods: ["GET","POST","PUT","DELETE"],
-  allowedHeaders: ["Content-Type","Authorization"]
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+  credentials: true
 }));
 
+// Body parser
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Request logger
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
 
 /* ================= ROUTES ================= */
-
+// Register all routes
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/request", requestRoutes);
@@ -36,22 +46,36 @@ app.use("/api/part", partRoutes);
 
 /* ================= HEALTH CHECK ================= */
 app.get("/", (req, res) => {
-  res.send("API Running Successfully 🚀");
+  res.json({
+    success: true,
+    message: "API Running Successfully 🚀",
+    timestamp: new Date().toISOString()
+  });
+});
+
+/* ================= 404 HANDLER ================= */
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.method} ${req.url} not found`
+  });
 });
 
 /* ================= ERROR HANDLER ================= */
-
 app.use((err, req, res, next) => {
-  console.error("ERROR:", err);
-
-  res.status(500).json({
+  console.error("Error:", err.message);
+  console.error("Stack:", err.stack);
+  
+  res.status(err.status || 500).json({
     success: false,
     message: err.message || "Internal Server Error"
   });
 });
-/* ================= SERVER ================= */
+
+/* ================= START SERVER ================= */
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📡 CORS enabled for all origins`);
 });
