@@ -2,44 +2,10 @@ const User = require("../models/user");
 const OTP = require("../models/otp");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
-const dns = require('dns');
+const { Resend } = require('resend');
 
-// Force DNS resolution to use IPv4
-dns.setDefaultResultOrder('ipv4first');
-
-/* ================= EMAIL TRANSPORTER with IPv4 fix ================= */
-console.log('📧 Configuring Email Transporter...');
-
-// Use 'localhost' instead of '::' to force IPv4
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_MAIL,
-    pass: process.env.SMTP_APP_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false,
-    ciphers: 'SSLv3'
-  },
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 30000,
-  debug: true,
-  logger: true
-});
-
-// Verify transporter connection
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('❌ Email transporter error:', error.message);
-    console.log('⚠️ Email will be displayed in console as fallback');
-  } else {
-    console.log('✅ Email transporter ready to send emails');
-  }
-});
+// Initialize Resend with your API key
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 /* ================= HELPER FUNCTIONS ================= */
 const generateToken = (user) => {
@@ -48,6 +14,30 @@ const generateToken = (user) => {
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES || "7d" }
   );
+};
+
+// Email sending function using Resend
+const sendEmailWithResend = async (to, subject, html, text) => {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
+      to: [to],
+      subject: subject,
+      html: html,
+      text: text
+    });
+
+    if (error) {
+      console.error('Resend error:', error);
+      return { success: false, error: error.message };
+    }
+
+    console.log('✅ Email sent via Resend:', data);
+    return { success: true, data: data };
+  } catch (error) {
+    console.error('Email send error:', error);
+    return { success: false, error: error.message };
+  }
 };
 
 /* ================= SEND OTP FOR REGISTRATION ================= */
@@ -89,53 +79,135 @@ exports.sendRegistrationOTP = async (req, res) => {
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
 
-    // Try to send email, but don't fail if it doesn't work
-    let emailSent = false;
-    try {
-      const mailOptions = {
-        from: `"LCGC RFQ" <${process.env.SMTP_MAIL}>`,
-        to: email,
-        subject: "🔐 Verify Your LCGC RFQ Registration",
-        html: `
-          <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1);">
-            <div style="background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center;">
-              <h1 style="color: white; margin: 0; font-size: 32px;">LCGC RFQ</h1>
-              <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0;">Resolute Group</p>
+    // Prepare email content
+    const emailHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>LCGC RFQ - Email Verification</title>
+        <style>
+          body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f6f9;
+          }
+          .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+          }
+          .header {
+            background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%);
+            padding: 30px;
+            text-align: center;
+          }
+          .header h1 {
+            color: white;
+            margin: 0;
+            font-size: 32px;
+          }
+          .header p {
+            color: rgba(255,255,255,0.9);
+            margin: 10px 0 0;
+          }
+          .content {
+            padding: 40px 30px;
+          }
+          .otp-box {
+            background: #f8fafc;
+            border: 2px dashed #cbd5e1;
+            padding: 25px;
+            text-align: center;
+            border-radius: 12px;
+            margin: 30px 0;
+          }
+          .otp-code {
+            font-size: 42px;
+            font-weight: bold;
+            letter-spacing: 8px;
+            color: #0f2a5e;
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            display: inline-block;
+            font-family: monospace;
+          }
+          .footer {
+            text-align: center;
+            padding: 20px;
+            background: #f8fafc;
+            font-size: 12px;
+            color: #64748b;
+          }
+          h2 {
+            color: #0f2a5e;
+            margin-top: 0;
+          }
+          p {
+            color: #475569;
+            font-size: 16px;
+            line-height: 1.5;
+          }
+          .small-text {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 15px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>LCGC RFQ</h1>
+            <p>Resolute Group</p>
+          </div>
+          
+          <div class="content">
+            <h2>Verify Your Email Address</h2>
+            <p>Thank you for registering with LCGC RFQ. Please use the following One-Time Password (OTP) to complete your registration.</p>
+            
+            <div class="otp-box">
+              <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
+              <div class="otp-code">${otp}</div>
+              <p class="small-text">This OTP is valid for <strong>10 minutes</strong></p>
             </div>
             
-            <div style="padding: 40px 30px;">
-              <h2 style="color: #0f2a5e; margin-top: 0;">Verify Your Email Address</h2>
-              <p style="color: #475569; font-size: 16px; line-height: 1.5;">Thank you for registering with LCGC RFQ. Please use the following One-Time Password (OTP) to complete your registration.</p>
-              
-              <div style="background: #f8fafc; border: 2px dashed #cbd5e1; padding: 25px; text-align: center; border-radius: 12px; margin: 30px 0;">
-                <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
-                <div style="font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: white; padding: 15px; border-radius: 10px; display: inline-block; font-family: monospace;">${otp}</div>
-                <p style="margin: 15px 0 0; color: #64748b; font-size: 12px;">This OTP is valid for <strong>10 minutes</strong></p>
-              </div>
-              
-              <p style="color: #475569; font-size: 14px;">If you didn't request this OTP, please ignore this email.</p>
-              
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0 20px;">
-              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">This is an automated email, please do not reply.</p>
-            </div>
+            <p>If you didn't request this OTP, please ignore this email.</p>
           </div>
-        `,
-        text: `Your OTP for registration is: ${otp}. This OTP is valid for 10 minutes.`
-      };
+          
+          <div class="footer">
+            <p>This is an automated email, please do not reply.</p>
+            <p>&copy; 2026 LCGC RFQ. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
 
-      await transporter.sendMail(mailOptions);
-      emailSent = true;
-      console.log(`✅ Registration OTP email sent to ${email}`);
-    } catch (emailError) {
-      console.error('❌ Email sending failed:', emailError.message);
-      console.log(`⚠️ Using fallback - OTP displayed in console`);
+    const emailText = `Your OTP for registration is: ${otp}. This OTP is valid for 10 minutes.`;
+
+    // Send email using Resend
+    const emailResult = await sendEmailWithResend(email, "🔐 Verify Your LCGC RFQ Registration", emailHtml, emailText);
+    
+    if (emailResult.success) {
+      res.json({
+        success: true,
+        message: "OTP sent successfully to your email"
+      });
+    } else {
+      // Fallback: Return OTP in response if email fails
+      res.json({
+        success: true,
+        message: `OTP generated. Please use: ${otp} (Email delivery failed: ${emailResult.error})`,
+        devOTP: otp
+      });
     }
-
-    res.json({
-      success: true,
-      message: emailSent ? "OTP sent successfully to your email" : `OTP generated. Please use: ${otp} (Check server console)`,
-      devOTP: otp // For development - remove in production
-    });
 
   } catch (error) {
     console.error("SEND REGISTRATION OTP ERROR:", error);
@@ -184,54 +256,135 @@ exports.sendOTP = async (req, res) => {
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
 
-    // Try to send email
-    let emailSent = false;
-    try {
-      const mailOptions = {
-        from: `"LCGC RFQ" <${process.env.SMTP_MAIL}>`,
-        to: email,
-        subject: "🔐 Your LCGC RFQ Login OTP",
-        html: `
-          <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1);">
-            <div style="background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center;">
-              <h1 style="color: white; margin: 0; font-size: 32px;">LCGC RFQ</h1>
-              <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0;">Resolute Group</p>
+    // Prepare email content
+    const emailHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>LCGC RFQ - Login OTP</title>
+        <style>
+          body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f6f9;
+          }
+          .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+          }
+          .header {
+            background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%);
+            padding: 30px;
+            text-align: center;
+          }
+          .header h1 {
+            color: white;
+            margin: 0;
+            font-size: 32px;
+          }
+          .header p {
+            color: rgba(255,255,255,0.9);
+            margin: 10px 0 0;
+          }
+          .content {
+            padding: 40px 30px;
+          }
+          .otp-box {
+            background: #f8fafc;
+            border: 2px dashed #cbd5e1;
+            padding: 25px;
+            text-align: center;
+            border-radius: 12px;
+            margin: 30px 0;
+          }
+          .otp-code {
+            font-size: 42px;
+            font-weight: bold;
+            letter-spacing: 8px;
+            color: #0f2a5e;
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            display: inline-block;
+            font-family: monospace;
+          }
+          .footer {
+            text-align: center;
+            padding: 20px;
+            background: #f8fafc;
+            font-size: 12px;
+            color: #64748b;
+          }
+          h2 {
+            color: #0f2a5e;
+            margin-top: 0;
+          }
+          p {
+            color: #475569;
+            font-size: 16px;
+            line-height: 1.5;
+          }
+          .small-text {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 15px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>LCGC RFQ</h1>
+            <p>Resolute Group</p>
+          </div>
+          
+          <div class="content">
+            <h2>Your Login OTP</h2>
+            <p>Hello <strong>${user.name}</strong>,</p>
+            <p>Use the following OTP to login to your account. This OTP is valid for <strong>10 minutes</strong>.</p>
+            
+            <div class="otp-box">
+              <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
+              <div class="otp-code">${otp}</div>
+              <p class="small-text">This OTP is valid for <strong>10 minutes</strong></p>
             </div>
             
-            <div style="padding: 40px 30px;">
-              <h2 style="color: #0f2a5e; margin-top: 0;">Your Login OTP</h2>
-              <p style="color: #475569; font-size: 16px; line-height: 1.5;">Hello <strong>${user.name}</strong>,</p>
-              <p style="color: #475569;">Use the following OTP to login to your account. This OTP is valid for <strong>10 minutes</strong>.</p>
-              
-              <div style="background: #f8fafc; border: 2px dashed #cbd5e1; padding: 25px; text-align: center; border-radius: 12px; margin: 30px 0;">
-                <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
-                <div style="font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: white; padding: 15px; border-radius: 10px; display: inline-block; font-family: monospace;">${otp}</div>
-                <p style="margin: 15px 0 0; color: #64748b; font-size: 12px;">This OTP is valid for <strong>10 minutes</strong></p>
-              </div>
-              
-              <p style="color: #475569; font-size: 14px;">If you didn't request this OTP, please ignore this email.</p>
-              
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0 20px;">
-              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">This is an automated email, please do not reply.</p>
-            </div>
+            <p>If you didn't request this OTP, please ignore this email.</p>
           </div>
-        `,
-        text: `Your OTP for login is: ${otp}. This OTP is valid for 10 minutes.`
-      };
+          
+          <div class="footer">
+            <p>This is an automated email, please do not reply.</p>
+            <p>&copy; 2026 LCGC RFQ. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
 
-      await transporter.sendMail(mailOptions);
-      emailSent = true;
-      console.log(`✅ Login OTP email sent to ${email}`);
-    } catch (emailError) {
-      console.error('❌ Email sending failed:', emailError.message);
-      console.log(`⚠️ Using fallback - OTP displayed in console`);
+    const emailText = `Your OTP for login is: ${otp}. This OTP is valid for 10 minutes.`;
+
+    // Send email using Resend
+    const emailResult = await sendEmailWithResend(email, "🔐 Your LCGC RFQ Login OTP", emailHtml, emailText);
+    
+    if (emailResult.success) {
+      res.json({
+        success: true,
+        message: "OTP sent successfully to your email"
+      });
+    } else {
+      res.json({
+        success: true,
+        message: `OTP generated. Please use: ${otp} (Email delivery failed: ${emailResult.error})`,
+        devOTP: otp
+      });
     }
-
-    res.json({
-      success: true,
-      message: emailSent ? "OTP sent successfully to your email" : `OTP generated. Please use: ${otp} (Check server console)`,
-      devOTP: otp
-    });
 
   } catch (error) {
     console.error("SEND OTP ERROR:", error);
@@ -254,8 +407,6 @@ exports.verifyRegistrationOTP = async (req, res) => {
       });
     }
 
-    console.log(`🔐 Verifying OTP for ${email}: ${otp}`);
-
     const otpRecord = await OTP.findOne({ 
       email: email.toLowerCase(), 
       otp: otp
@@ -275,8 +426,6 @@ exports.verifyRegistrationOTP = async (req, res) => {
         message: "OTP has expired. Please request a new OTP." 
       });
     }
-
-    console.log(`✅ OTP verified successfully for ${email}`);
 
     res.json({
       success: true,
@@ -303,8 +452,6 @@ exports.verifyOTP = async (req, res) => {
         message: "Email and OTP are required" 
       });
     }
-
-    console.log(`🔐 Verifying login OTP for ${email}: ${otp}`);
 
     const otpRecord = await OTP.findOne({ 
       email: email.toLowerCase(), 
@@ -337,14 +484,10 @@ exports.verifyOTP = async (req, res) => {
 
     const token = generateToken(user);
 
-    // Update last login
     user.lastLogin = new Date();
     await user.save();
 
-    // Delete used OTP
     await OTP.deleteOne({ email: email.toLowerCase() });
-
-    console.log(`✅ User ${email} logged in successfully via OTP`);
 
     res.json({
       success: true,
@@ -413,12 +556,9 @@ exports.register = async (req, res) => {
 
     await user.save();
 
-    // Delete OTP after successful registration
     await OTP.deleteMany({ email: email.toLowerCase() });
 
     const token = generateToken(user);
-
-    console.log(`✅ New user registered: ${email}`);
 
     res.status(201).json({
       success: true,
@@ -462,13 +602,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (!user.password) {
-      return res.status(500).json({
-        success: false,
-        message: "User password missing in database"
-      });
-    }
-
     const match = await bcrypt.compare(password, user.password);
 
     if (!match) {
@@ -479,8 +612,6 @@ exports.login = async (req, res) => {
     }
 
     const token = generateToken(user);
-
-    console.log(`✅ User ${email} logged in via password`);
 
     res.status(200).json({
       success: true,
