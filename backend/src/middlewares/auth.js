@@ -13,8 +13,7 @@ exports.verifyToken = async (req, res, next) => {
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({
         success: false,
-        message: "Access denied. No token provided.",
-        code: "NO_TOKEN"
+        message: "Access denied. No token provided."
       });
     }
 
@@ -24,34 +23,24 @@ exports.verifyToken = async (req, res, next) => {
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: "Token missing",
-        code: "TOKEN_MISSING"
+        message: "Token missing"
       });
     }
 
     // ✅ 3. Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // ✅ 4. Check if user still exists in database
+    // ✅ 4. Check if user exists
     const user = await User.findById(decoded.id).select("-password");
     
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "User no longer exists",
-        code: "USER_NOT_FOUND"
+        message: "User not found"
       });
     }
 
-    if (!user.isActive) {
-      return res.status(401).json({
-        success: false,
-        message: "Account is deactivated",
-        code: "ACCOUNT_INACTIVE"
-      });
-    }
-
-    // ✅ 5. Attach user data safely
+    // ✅ 5. Attach user data
     req.user = {
       id: user._id,
       email: user.email,
@@ -64,29 +53,23 @@ exports.verifyToken = async (req, res, next) => {
   } catch (error) {
     console.error("JWT Verification Error:", error.message);
 
-    // ✅ 6. Handle specific JWT errors
     if (error.name === "TokenExpiredError") {
       return res.status(401).json({
         success: false,
-        message: "Token expired. Please login again.",
-        code: "TOKEN_EXPIRED",
-        expiredAt: error.expiredAt
+        message: "Token expired. Please login again."
       });
     }
 
     if (error.name === "JsonWebTokenError") {
       return res.status(401).json({
         success: false,
-        message: "Invalid token. Please login again.",
-        code: "INVALID_TOKEN"
+        message: "Invalid token. Please login again."
       });
     }
 
     return res.status(401).json({
       success: false,
-      message: "Authentication failed",
-      code: "AUTH_FAILED",
-      error: error.message
+      message: "Authentication failed"
     });
   }
 };
@@ -107,8 +90,7 @@ exports.authorize = (...roles) => {
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        message: `Access denied. Required role: ${roles.join(" or ")}`,
-        yourRole: req.user.role
+        message: `Access denied. Required role: ${roles.join(" or ")}`
       });
     }
 
@@ -117,7 +99,7 @@ exports.authorize = (...roles) => {
 };
 
 /**
- * Optional: Check if user is admin
+ * Check if user is admin
  */
 exports.isAdmin = async (req, res, next) => {
   try {

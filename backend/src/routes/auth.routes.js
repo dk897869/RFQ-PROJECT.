@@ -1,10 +1,10 @@
 const express = require("express");
 const router = express.Router();
 
-// ✅ Import Controllers
+// Import Controllers
 const authController = require("../controllers/auth.controller");
 
-// ✅ Import Middleware (using your existing verifyToken)
+// Import Middleware
 const { verifyToken } = require("../middlewares/auth");
 
 /* ================= AUTH ROUTES ================= */
@@ -17,19 +17,23 @@ router.post("/register", authController.register);
 // Traditional Login (Email + Password)
 router.post("/login", authController.login);
 
+// ====================== REGISTRATION OTP ROUTES ======================
+// Send OTP for Registration
+router.post("/send-registration-otp", authController.sendRegistrationOTP);
+
+// Verify OTP for Registration
+router.post("/verify-registration-otp", authController.verifyRegistrationOTP);
+
+// ====================== LOGIN OTP ROUTES ======================
 // Send OTP for Login
 router.post("/send-otp", authController.sendOTP);
 
-// Verify OTP and Login (Fixed endpoint to match frontend)
-router.post("/verify-otp", authController.loginWithOTP);
+// Verify OTP for Login
+router.post("/verify-otp", authController.verifyOTP);
 
 // ====================== PROTECTED ROUTES ======================
 
 // Get Current Logged-in User
-router.get(
-  "/me",
-  verifyToken,
-  authController.getMe
-);
+router.get("/me", verifyToken, authController.getMe);
 
 module.exports = router;

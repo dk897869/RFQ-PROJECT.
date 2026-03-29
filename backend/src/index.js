@@ -43,7 +43,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/request", requestRoutes);
 app.use("/api/vendor", vendorRoutes);
 app.use("/api/part", partRoutes);
-
+app.use("/api/user-rights", require("./routes/userRight.routes"));
 /* ================= HEALTH CHECK ================= */
 app.get("/", (req, res) => {
   res.json({
