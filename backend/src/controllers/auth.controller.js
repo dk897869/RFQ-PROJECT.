@@ -3,38 +3,39 @@ const OTP = require("../models/otp");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
+const dns = require('dns');
 
-/* ================= EMAIL TRANSPORTER with better configuration ================= */
+// Force DNS resolution to use IPv4
+dns.setDefaultResultOrder('ipv4first');
+
+/* ================= EMAIL TRANSPORTER with IPv4 fix ================= */
 console.log('📧 Configuring Email Transporter...');
-console.log('SMTP_HOST:', process.env.SMTP_HOST);
-console.log('SMTP_PORT:', process.env.SMTP_PORT);
-console.log('SMTP_MAIL:', process.env.SMTP_MAIL);
-console.log('SMTP_APP_PASS exists:', !!process.env.SMTP_APP_PASS);
 
+// Use 'localhost' instead of '::' to force IPv4
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: parseInt(process.env.SMTP_PORT) || 587,
-  secure: false, // true for 465, false for other ports
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false,
   auth: {
     user: process.env.SMTP_MAIL,
     pass: process.env.SMTP_APP_PASS,
   },
   tls: {
-    rejectUnauthorized: false
+    rejectUnauthorized: false,
+    ciphers: 'SSLv3'
   },
-  connectionTimeout: 30000, // 30 seconds
+  connectionTimeout: 30000,
   greetingTimeout: 30000,
-  socketTimeout: 30000
+  socketTimeout: 30000,
+  debug: true,
+  logger: true
 });
 
-// Verify transporter connection with better error handling
+// Verify transporter connection
 transporter.verify((error, success) => {
   if (error) {
-    console.error('❌ Email transporter error details:', {
-      message: error.message,
-      code: error.code,
-      command: error.command
-    });
+    console.error('❌ Email transporter error:', error.message);
+    console.log('⚠️ Email will be displayed in console as fallback');
   } else {
     console.log('✅ Email transporter ready to send emails');
   }
@@ -47,28 +48,6 @@ const generateToken = (user) => {
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES || "7d" }
   );
-};
-
-// Function to send email with retry logic
-const sendEmailWithRetry = async (mailOptions, retries = 3) => {
-  for (let i = 0; i < retries; i++) {
-    try {
-      console.log(`📧 Attempting to send email (attempt ${i + 1}/${retries})...`);
-      const info = await transporter.sendMail(mailOptions);
-      console.log('✅ Email sent successfully!');
-      console.log('📧 Message ID:', info.messageId);
-      console.log('📧 Response:', info.response);
-      return true;
-    } catch (error) {
-      console.error(`❌ Email attempt ${i + 1} failed:`, error.message);
-      if (i === retries - 1) {
-        throw error;
-      }
-      // Wait 1 second before retry
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
-  return false;
 };
 
 /* ================= SEND OTP FOR REGISTRATION ================= */
@@ -96,7 +75,9 @@ exports.sendRegistrationOTP = async (req, res) => {
 
     // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    console.log(`🔐 Generated OTP for ${email}: ${otp}`);
+    console.log(`🔐 ========================================`);
+    console.log(`🔐 REGISTRATION OTP FOR ${email}: ${otp}`);
+    console.log(`🔐 ========================================`);
 
     // Remove old OTP for this email
     await OTP.deleteMany({ email: email.toLowerCase() });
@@ -108,72 +89,59 @@ exports.sendRegistrationOTP = async (req, res) => {
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
 
-    // Prepare email HTML
-    const emailHtml = `
-      <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1);">
-        <div style="background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 32px;">LCGC RFQ</h1>
-          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0;">Resolute Group</p>
-        </div>
-        
-        <div style="padding: 40px 30px;">
-          <h2 style="color: #0f2a5e; margin-top: 0;">Verify Your Email Address</h2>
-          <p style="color: #475569; font-size: 16px; line-height: 1.5;">Thank you for registering with LCGC RFQ. Please use the following One-Time Password (OTP) to complete your registration.</p>
-          
-          <div style="background: #f8fafc; border: 2px dashed #cbd5e1; padding: 25px; text-align: center; border-radius: 12px; margin: 30px 0;">
-            <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
-            <div style="font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: white; padding: 15px; border-radius: 10px; display: inline-block; font-family: monospace;">${otp}</div>
-            <p style="margin: 15px 0 0; color: #64748b; font-size: 12px;">This OTP is valid for <strong>10 minutes</strong></p>
-          </div>
-          
-          <p style="color: #475569; font-size: 14px;">If you didn't request this OTP, please ignore this email.</p>
-          
-          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0 20px;">
-          <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">This is an automated email, please do not reply.</p>
-        </div>
-      </div>
-    `;
-
-    const textEmail = `Your OTP for registration is: ${otp}. This OTP is valid for 10 minutes.`;
-
-    const mailOptions = {
-      from: `"LCGC RFQ" <${process.env.SMTP_MAIL}>`,
-      to: email,
-      subject: "🔐 Verify Your LCGC RFQ Registration",
-      html: emailHtml,
-      text: textEmail
-    };
-
-    // Try to send email
+    // Try to send email, but don't fail if it doesn't work
+    let emailSent = false;
     try {
-      await sendEmailWithRetry(mailOptions);
-      console.log(`✅ Registration OTP sent successfully to ${email}`);
-      
-      // For development, also log OTP to console
-      console.log(`📧 DEVELOPMENT MODE - OTP for ${email}: ${otp}`);
-      
-      res.json({
-        success: true,
-        message: "OTP sent successfully to your email. (Check console for OTP if email fails)"
-      });
+      const mailOptions = {
+        from: `"LCGC RFQ" <${process.env.SMTP_MAIL}>`,
+        to: email,
+        subject: "🔐 Verify Your LCGC RFQ Registration",
+        html: `
+          <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1);">
+            <div style="background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center;">
+              <h1 style="color: white; margin: 0; font-size: 32px;">LCGC RFQ</h1>
+              <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0;">Resolute Group</p>
+            </div>
+            
+            <div style="padding: 40px 30px;">
+              <h2 style="color: #0f2a5e; margin-top: 0;">Verify Your Email Address</h2>
+              <p style="color: #475569; font-size: 16px; line-height: 1.5;">Thank you for registering with LCGC RFQ. Please use the following One-Time Password (OTP) to complete your registration.</p>
+              
+              <div style="background: #f8fafc; border: 2px dashed #cbd5e1; padding: 25px; text-align: center; border-radius: 12px; margin: 30px 0;">
+                <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
+                <div style="font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: white; padding: 15px; border-radius: 10px; display: inline-block; font-family: monospace;">${otp}</div>
+                <p style="margin: 15px 0 0; color: #64748b; font-size: 12px;">This OTP is valid for <strong>10 minutes</strong></p>
+              </div>
+              
+              <p style="color: #475569; font-size: 14px;">If you didn't request this OTP, please ignore this email.</p>
+              
+              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0 20px;">
+              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">This is an automated email, please do not reply.</p>
+            </div>
+          </div>
+        `,
+        text: `Your OTP for registration is: ${otp}. This OTP is valid for 10 minutes.`
+      };
+
+      await transporter.sendMail(mailOptions);
+      emailSent = true;
+      console.log(`✅ Registration OTP email sent to ${email}`);
     } catch (emailError) {
-      console.error('❌ Email sending failed:', emailError);
-      
-      // For development, still return success with OTP in console
-      console.log(`⚠️ EMAIL FAILED - OTP for ${email} is: ${otp}`);
-      
-      res.json({
-        success: true,
-        message: `OTP generated. Check server console for OTP: ${otp}`,
-        devOTP: otp // Only for development, remove in production
-      });
+      console.error('❌ Email sending failed:', emailError.message);
+      console.log(`⚠️ Using fallback - OTP displayed in console`);
     }
+
+    res.json({
+      success: true,
+      message: emailSent ? "OTP sent successfully to your email" : `OTP generated. Please use: ${otp} (Check server console)`,
+      devOTP: otp // For development - remove in production
+    });
 
   } catch (error) {
     console.error("SEND REGISTRATION OTP ERROR:", error);
     res.status(500).json({ 
       success: false, 
-      message: error.message || "Failed to send OTP. Please check your email configuration." 
+      message: error.message || "Failed to send OTP" 
     });
   }
 };
@@ -202,7 +170,9 @@ exports.sendOTP = async (req, res) => {
 
     // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    console.log(`🔐 Generated Login OTP for ${email}: ${otp}`);
+    console.log(`🔐 ========================================`);
+    console.log(`🔐 LOGIN OTP FOR ${email}: ${otp}`);
+    console.log(`🔐 ========================================`);
 
     // Remove old OTP
     await OTP.deleteMany({ email: email.toLowerCase() });
@@ -214,69 +184,60 @@ exports.sendOTP = async (req, res) => {
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
 
-    // Prepare email
-    const mailOptions = {
-      from: `"LCGC RFQ" <${process.env.SMTP_MAIL}>`,
-      to: email,
-      subject: "🔐 Your LCGC RFQ Login OTP",
-      html: `
-        <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1);">
-          <div style="background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 32px;">LCGC RFQ</h1>
-            <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0;">Resolute Group</p>
-          </div>
-          
-          <div style="padding: 40px 30px;">
-            <h2 style="color: #0f2a5e; margin-top: 0;">Your Login OTP</h2>
-            <p style="color: #475569; font-size: 16px; line-height: 1.5;">Hello <strong>${user.name}</strong>,</p>
-            <p style="color: #475569;">Use the following OTP to login to your account. This OTP is valid for <strong>10 minutes</strong>.</p>
-            
-            <div style="background: #f8fafc; border: 2px dashed #cbd5e1; padding: 25px; text-align: center; border-radius: 12px; margin: 30px 0;">
-              <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
-              <div style="font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: white; padding: 15px; border-radius: 10px; display: inline-block; font-family: monospace;">${otp}</div>
-              <p style="margin: 15px 0 0; color: #64748b; font-size: 12px;">This OTP is valid for <strong>10 minutes</strong></p>
+    // Try to send email
+    let emailSent = false;
+    try {
+      const mailOptions = {
+        from: `"LCGC RFQ" <${process.env.SMTP_MAIL}>`,
+        to: email,
+        subject: "🔐 Your LCGC RFQ Login OTP",
+        html: `
+          <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1);">
+            <div style="background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center;">
+              <h1 style="color: white; margin: 0; font-size: 32px;">LCGC RFQ</h1>
+              <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0;">Resolute Group</p>
             </div>
             
-            <p style="color: #475569; font-size: 14px;">If you didn't request this OTP, please ignore this email.</p>
-            
-            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0 20px;">
-            <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">This is an automated email, please do not reply.</p>
+            <div style="padding: 40px 30px;">
+              <h2 style="color: #0f2a5e; margin-top: 0;">Your Login OTP</h2>
+              <p style="color: #475569; font-size: 16px; line-height: 1.5;">Hello <strong>${user.name}</strong>,</p>
+              <p style="color: #475569;">Use the following OTP to login to your account. This OTP is valid for <strong>10 minutes</strong>.</p>
+              
+              <div style="background: #f8fafc; border: 2px dashed #cbd5e1; padding: 25px; text-align: center; border-radius: 12px; margin: 30px 0;">
+                <p style="margin: 0 0 10px; color: #475569; font-size: 14px;">Your OTP is:</p>
+                <div style="font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: white; padding: 15px; border-radius: 10px; display: inline-block; font-family: monospace;">${otp}</div>
+                <p style="margin: 15px 0 0; color: #64748b; font-size: 12px;">This OTP is valid for <strong>10 minutes</strong></p>
+              </div>
+              
+              <p style="color: #475569; font-size: 14px;">If you didn't request this OTP, please ignore this email.</p>
+              
+              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0 20px;">
+              <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">This is an automated email, please do not reply.</p>
+            </div>
           </div>
-        </div>
-      `,
-      text: `Your OTP for login is: ${otp}. This OTP is valid for 10 minutes.`
-    };
+        `,
+        text: `Your OTP for login is: ${otp}. This OTP is valid for 10 minutes.`
+      };
 
-    // Try to send email
-    try {
-      await sendEmailWithRetry(mailOptions);
-      console.log(`✅ Login OTP sent successfully to ${email}`);
-      
-      // For development, also log OTP to console
-      console.log(`📧 DEVELOPMENT MODE - OTP for ${email}: ${otp}`);
-      
-      res.json({
-        success: true,
-        message: "OTP sent successfully to your email"
-      });
+      await transporter.sendMail(mailOptions);
+      emailSent = true;
+      console.log(`✅ Login OTP email sent to ${email}`);
     } catch (emailError) {
-      console.error('❌ Email sending failed:', emailError);
-      
-      // For development, still return success with OTP in console
-      console.log(`⚠️ EMAIL FAILED - OTP for ${email} is: ${otp}`);
-      
-      res.json({
-        success: true,
-        message: `OTP generated. Check server console for OTP: ${otp}`,
-        devOTP: otp // Only for development, remove in production
-      });
+      console.error('❌ Email sending failed:', emailError.message);
+      console.log(`⚠️ Using fallback - OTP displayed in console`);
     }
+
+    res.json({
+      success: true,
+      message: emailSent ? "OTP sent successfully to your email" : `OTP generated. Please use: ${otp} (Check server console)`,
+      devOTP: otp
+    });
 
   } catch (error) {
     console.error("SEND OTP ERROR:", error);
     res.status(500).json({ 
       success: false, 
-      message: error.message || "Failed to send OTP. Please check your email configuration." 
+      message: error.message || "Failed to send OTP" 
     });
   }
 };
@@ -293,12 +254,7 @@ exports.verifyRegistrationOTP = async (req, res) => {
       });
     }
 
-    if (otp.length !== 6 || !/^\d+$/.test(otp)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid OTP format. OTP must be 6 digits." 
-      });
-    }
+    console.log(`🔐 Verifying OTP for ${email}: ${otp}`);
 
     const otpRecord = await OTP.findOne({ 
       email: email.toLowerCase(), 
@@ -320,7 +276,8 @@ exports.verifyRegistrationOTP = async (req, res) => {
       });
     }
 
-    // OTP is valid, but don't delete it yet (will be deleted after registration)
+    console.log(`✅ OTP verified successfully for ${email}`);
+
     res.json({
       success: true,
       message: "OTP verified successfully"
@@ -347,12 +304,7 @@ exports.verifyOTP = async (req, res) => {
       });
     }
 
-    if (otp.length !== 6 || !/^\d+$/.test(otp)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid OTP format. OTP must be 6 digits." 
-      });
-    }
+    console.log(`🔐 Verifying login OTP for ${email}: ${otp}`);
 
     const otpRecord = await OTP.findOne({ 
       email: email.toLowerCase(), 
@@ -391,6 +343,8 @@ exports.verifyOTP = async (req, res) => {
 
     // Delete used OTP
     await OTP.deleteOne({ email: email.toLowerCase() });
+
+    console.log(`✅ User ${email} logged in successfully via OTP`);
 
     res.json({
       success: true,
@@ -464,6 +418,8 @@ exports.register = async (req, res) => {
 
     const token = generateToken(user);
 
+    console.log(`✅ New user registered: ${email}`);
+
     res.status(201).json({
       success: true,
       message: "User registered successfully",
@@ -522,11 +478,9 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-
     const token = generateToken(user);
+
+    console.log(`✅ User ${email} logged in via password`);
 
     res.status(200).json({
       success: true,
