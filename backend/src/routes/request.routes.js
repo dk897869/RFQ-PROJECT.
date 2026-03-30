@@ -1,27 +1,51 @@
 const express = require("express");
 const router = express.Router();
 
-const vendorController = require("../controllers/vendor.controller");
+const requestController = require("../controllers/request.controller");
 const { verifyToken } = require("../middlewares/auth");
 
-// ====================== FULL CRUD ======================
+// ====================== REQUEST ROUTES ======================
 
-// GET All Vendors
-router.get("/", verifyToken, vendorController.getVendors);
+// GET All Requests
+router.get("/", verifyToken, requestController.getRequests);
 
-// GET Single Vendor by ID
-router.get("/:id", verifyToken, vendorController.getVendorById);
+// GET Dashboard Stats
+router.get("/stats/dashboard", verifyToken, requestController.getDashboardStats);
 
-// CREATE New Vendor
-router.post("/", verifyToken, vendorController.addVendor);
+// GET My Pending Requests
+router.get("/my-pending", verifyToken, requestController.getMyPendingRequests);
 
-// UPDATE Vendor (Full Update)
-router.put("/:id", verifyToken, vendorController.updateVendor);
+// GET Requests by Status
+router.get("/status/:status", verifyToken, requestController.getRequestsByStatus);
 
-// PATCH - Update Vendor Status
-router.patch("/:id/status", verifyToken, vendorController.updateVendorStatus);
+// TEST Endpoint for CC Emails (MUST be before the /:id route)
+router.post("/test-email", verifyToken, requestController.testEmail);
 
-// DELETE Vendor
-router.delete("/:id", verifyToken, vendorController.deleteVendor);
+// GET Single Request by ID (must be after specific routes)
+router.get("/:id", verifyToken, requestController.getRequestById);
+
+// CREATE New Request
+router.post("/", verifyToken, requestController.createRequest);
+
+// UPDATE Request
+router.put("/:id", verifyToken, requestController.updateRequest);
+
+// Approve Request
+router.patch("/:id/approve", verifyToken, requestController.approveRequest);
+
+// Reject Request
+router.patch("/:id/reject", verifyToken, requestController.rejectRequest);
+
+// DELETE Request
+router.delete("/:id", verifyToken, requestController.deleteRequest);
+
+// Add Attachment to Request
+router.post("/:id/attachments", verifyToken, requestController.addAttachment);
+
+// Get Approval Workflow Status
+router.get("/:id/workflow", verifyToken, requestController.getApprovalWorkflow);
+
+// Get Requests by Department
+router.get("/department/:department", verifyToken, requestController.getRequestsByDepartment);
 
 module.exports = router;

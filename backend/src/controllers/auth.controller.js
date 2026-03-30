@@ -16,16 +16,23 @@ const generateToken = (user) => {
   );
 };
 
-// Email sending function using Resend
-const sendEmailWithResend = async (to, subject, html, text) => {
+// Email sending function using Resend with CC support
+const sendEmailWithResend = async (to, subject, html, text, ccList = []) => {
   try {
-    const { data, error } = await resend.emails.send({
+    const emailOptions = {
       from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
       to: [to],
       subject: subject,
       html: html,
       text: text
-    });
+    };
+    
+    // Add CC if provided
+    if (ccList && ccList.length > 0) {
+      emailOptions.cc = ccList;
+    }
+    
+    const { data, error } = await resend.emails.send(emailOptions);
 
     if (error) {
       console.error('Resend error:', error);
@@ -40,10 +47,41 @@ const sendEmailWithResend = async (to, subject, html, text) => {
   }
 };
 
+// New function to send emails with multiple recipients
+const sendEmailToMultipleRecipients = async (recipients, subject, html, text, ccList = []) => {
+  try {
+    const emailOptions = {
+      from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
+      to: recipients,
+      subject: subject,
+      html: html,
+      text: text
+    };
+    
+    // Add CC if provided
+    if (ccList && ccList.length > 0) {
+      emailOptions.cc = ccList;
+    }
+    
+    const { data, error } = await resend.emails.send(emailOptions);
+
+    if (error) {
+      console.error('Resend error:', error);
+      return { success: false, error: error.message };
+    }
+
+    console.log('✅ Email sent to multiple recipients via Resend:', data);
+    return { success: true, data: data };
+  } catch (error) {
+    console.error('Email send error:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 /* ================= SEND OTP FOR REGISTRATION ================= */
 exports.sendRegistrationOTP = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, ccEmails } = req.body; // Added ccEmails support
 
     if (!email) {
       return res.status(400).json({ 
@@ -192,13 +230,14 @@ exports.sendRegistrationOTP = async (req, res) => {
 
     const emailText = `Your OTP for registration is: ${otp}. This OTP is valid for 10 minutes.`;
 
-    // Send email using Resend
-    const emailResult = await sendEmailWithResend(email, "🔐 Verify Your LCGC RFQ Registration", emailHtml, emailText);
+    // Send email using Resend with CC support
+    const ccArray = ccEmails ? (Array.isArray(ccEmails) ? ccEmails : [ccEmails]) : [];
+    const emailResult = await sendEmailWithResend(email, "🔐 Verify Your LCGC RFQ Registration", emailHtml, emailText, ccArray);
     
     if (emailResult.success) {
       res.json({
         success: true,
-        message: "OTP sent successfully to your email"
+        message: "OTP sent successfully to your email" + (ccArray.length > 0 ? ` and CC'd to ${ccArray.length} recipients` : "")
       });
     } else {
       // Fallback: Return OTP in response if email fails
@@ -221,7 +260,7 @@ exports.sendRegistrationOTP = async (req, res) => {
 /* ================= SEND OTP FOR LOGIN ================= */
 exports.sendOTP = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, ccEmails } = req.body; // Added ccEmails support
 
     if (!email) {
       return res.status(400).json({ 
@@ -370,13 +409,14 @@ exports.sendOTP = async (req, res) => {
 
     const emailText = `Your OTP for login is: ${otp}. This OTP is valid for 10 minutes.`;
 
-    // Send email using Resend
-    const emailResult = await sendEmailWithResend(email, "🔐 Your LCGC RFQ Login OTP", emailHtml, emailText);
+    // Send email using Resend with CC support
+    const ccArray = ccEmails ? (Array.isArray(ccEmails) ? ccEmails : [ccEmails]) : [];
+    const emailResult = await sendEmailWithResend(email, "🔐 Your LCGC RFQ Login OTP", emailHtml, emailText, ccArray);
     
     if (emailResult.success) {
       res.json({
         success: true,
-        message: "OTP sent successfully to your email"
+        message: "OTP sent successfully to your email" + (ccArray.length > 0 ? ` and CC'd to ${ccArray.length} recipients` : "")
       });
     } else {
       res.json({
@@ -654,3 +694,63 @@ exports.getMe = async (req, res) => {
     });
   }
 };
+
+/* ================= SEND BULK EMAIL NOTIFICATION ================= */
+// New function to send bulk email notifications for EP Approval
+exports.sendBulkEmailNotification = async (recipients, subject, htmlContent, textContent, ccList = []) => {
+  try {
+    const result = await sendEmailToMultipleRecipients(recipients, subject, htmlContent, textContent, ccList);
+    return result;
+  } catch (error) {
+    console.error("Bulk email error:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+/* ================= SEND APPROVAL REQUEST EMAIL ================= */
+// New function for EP Approval email with CC
+exports.sendApprovalRequestEmail = async (toEmail, requesterName, requestTitle, requestDetails, ccEmails = []) => {
+  try {
+    const emailHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: 'Segoe UI', Arial, sans-serif; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; padding: 20px; text-align: center; }
+          .content { padding: 20px; background: #f8fafc; }
+          .button { display: inline-block; padding: 10px 20px; background: #0f2a5e; color: white; text-decoration: none; border-radius: 5px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>EP Approval Request</h2>
+          </div>
+          <div class="content">
+            <p>Dear Approver,</p>
+            <p><strong>${requesterName}</strong> has submitted a new EP request for your approval.</p>
+            <p><strong>Title:</strong> ${requestTitle}</p>
+            <p><strong>Details:</strong> ${requestDetails}</p>
+            <p>Please login to the system to review and take action.</p>
+            <a href="${process.env.FRONTEND_URL}/ep-approval" class="button">Review Request</a>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+    
+    const emailText = `${requesterName} has submitted a new EP request: ${requestTitle}. Please login to review.`;
+    
+    const result = await sendEmailWithResend(toEmail, "EP Approval Request - Action Required", emailHtml, emailText, ccEmails);
+    return result;
+  } catch (error) {
+    console.error("Approval request email error:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Export the new email functions
+exports.sendEmailWithResend = sendEmailWithResend;
+exports.sendEmailToMultipleRecipients = sendEmailToMultipleRecipients;
