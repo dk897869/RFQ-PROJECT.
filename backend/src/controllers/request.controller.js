@@ -28,8 +28,24 @@ exports.getRequests = async (req, res) => {
     
     const requestsWithPermissions = requests.map(request => {
       const requestObj = request.toObject();
-      requestObj.canApprove = request.canUserApprove ? request.canUserApprove(req.user?.email) : false;
-      requestObj.currentApprover = request.getCurrentApprover ? request.getCurrentApprover() : null;
+      // Safe check for methods
+      requestObj.canApprove = false;
+      requestObj.currentApprover = null;
+      
+      try {
+        if (request.stakeholders && request.stakeholders.length > 0) {
+          // Find current pending approver
+          const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
+          if (pendingApprovers.length > 0) {
+            pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+            const currentApprover = pendingApprovers[0];
+            requestObj.currentApprover = currentApprover;
+            requestObj.canApprove = currentApprover && currentApprover.email === req.user?.email;
+          }
+        }
+      } catch (err) {
+        console.error('Error in permission check:', err);
+      }
       return requestObj;
     });
     
@@ -56,9 +72,15 @@ exports.getMyPendingRequests = async (req, res) => {
       status: { $in: ['Pending', 'In-Process'] }
     }).sort({ createdAt: -1 });
     
-    const pendingRequests = requests.filter(request => 
-      request.canUserApprove ? request.canUserApprove(req.user.email) : false
-    );
+    const pendingRequests = requests.filter(request => {
+      const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
+      if (pendingApprovers.length > 0) {
+        pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+        const currentApprover = pendingApprovers[0];
+        return currentApprover && currentApprover.email === req.user.email;
+      }
+      return false;
+    });
     
     res.json({
       success: true,
@@ -131,16 +153,38 @@ exports.createRequest = async (req, res) => {
         dateTime: null
       }));
     } else {
-      processedStakeholders = [{
-        name: "Default Approver",
-        email: "approver@example.com",
-        designation: "Manager",
-        line: "Sequential",
-        approvalOrder: 1,
-        status: "Pending",
-        remarks: "",
-        dateTime: null
-      }];
+      processedStakeholders = [
+        {
+          name: "Vijay Parashar",
+          email: "vijay@example.com",
+          designation: "Manager",
+          line: "Parallel",
+          approvalOrder: 1,
+          status: "Pending",
+          remarks: "",
+          dateTime: null
+        },
+        {
+          name: "Ravib",
+          email: "ravib@example.com",
+          designation: "A-GM",
+          line: "Parallel",
+          approvalOrder: 2,
+          status: "Pending",
+          remarks: "",
+          dateTime: null
+        },
+        {
+          name: "Shailendra Chothe",
+          email: "shailendra@example.com",
+          designation: "VP",
+          line: "Sequential",
+          approvalOrder: 3,
+          status: "Pending",
+          remarks: "",
+          dateTime: null
+        }
+      ];
     }
     
     // Process attachments
@@ -197,8 +241,12 @@ exports.createRequest = async (req, res) => {
     
     // Send email to first approver
     if (processedStakeholders.length > 0 && processedStakeholders[0].email) {
-      await sendNewRequestEmail(savedRequest, processedStakeholders[0]);
-      console.log(`📧 New request email sent to: ${processedStakeholders[0].email}`);
+      try {
+        await sendNewRequestEmail(savedRequest, processedStakeholders[0]);
+        console.log(`📧 New request email sent to: ${processedStakeholders[0].email}`);
+      } catch (emailErr) {
+        console.log("Email error:", emailErr.message);
+      }
     }
     
     res.status(201).json({
@@ -237,9 +285,22 @@ exports.getRequestById = async (req, res) => {
     }
     
     const requestObj = request.toObject();
-    requestObj.canApprove = request.canUserApprove ? request.canUserApprove(req.user?.email) : false;
-    requestObj.currentApprover = request.getCurrentApprover ? request.getCurrentApprover() : null;
     
+    // Calculate canApprove
+    requestObj.canApprove = false;
+    requestObj.currentApprover = null;
+    
+    if (request.stakeholders && request.stakeholders.length > 0) {
+      const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
+      if (pendingApprovers.length > 0) {
+        pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+        const currentApprover = pendingApprovers[0];
+        requestObj.currentApprover = currentApprover;
+        requestObj.canApprove = currentApprover && currentApprover.email === req.user?.email;
+      }
+    }
+    
+    // Mark as viewed by current approver
     if (requestObj.canApprove && req.user) {
       const currentApprover = request.stakeholders.find(
         s => s.email === req.user.email && s.status === 'Pending'
@@ -295,11 +356,14 @@ exports.updateRequest = async (req, res) => {
   }
 };
 
-// Approve Request
+// Approve Request - FIXED
 exports.approveRequest = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    
+    console.log(`📤 Approving request: ${id}`);
+    console.log(`User: ${req.user?.email}`);
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid request ID format" });
@@ -310,34 +374,50 @@ exports.approveRequest = async (req, res) => {
       return res.status(404).json({ success: false, message: "Request not found" });
     }
     
-    if (!request.canUserApprove(req.user.email)) {
-      return res.status(403).json({ success: false, message: "You are not authorized to approve this request at this time" });
+    // Find current pending approver
+    const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
+    if (pendingApprovers.length === 0) {
+      return res.status(400).json({ success: false, message: "No pending approvals found for this request" });
     }
     
-    const currentApprover = request.stakeholders.find(
-      s => s.email === req.user.email && s.status === 'Pending'
-    );
+    // Sort by approval order
+    pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+    const currentApprover = pendingApprovers[0];
     
-    if (!currentApprover) {
-      return res.status(400).json({ success: false, message: "No pending approval found for you" });
+    console.log(`Current approver: ${currentApprover?.name} (${currentApprover?.email})`);
+    console.log(`User email: ${req.user?.email}`);
+    
+    // Check if current user is the approver
+    if (currentApprover.email !== req.user.email) {
+      return res.status(403).json({ 
+        success: false, 
+        message: `You are not authorized to approve this request. This request is pending approval from ${currentApprover.name} (${currentApprover.email}).` 
+      });
     }
     
+    // Update current approver
     currentApprover.status = 'Approved';
     currentApprover.remarks = comments || currentApprover.remarks;
     currentApprover.dateTime = new Date();
     currentApprover.approvedBy = req.user.name;
     
-    const nextApprover = request.stakeholders.find(s => s.status === 'Pending');
+    // Find next pending approver
+    const remainingPending = request.stakeholders.filter(s => s.status === 'Pending');
+    const nextApprover = remainingPending.length > 0 ? remainingPending[0] : null;
     
     if (nextApprover) {
       request.status = 'In-Process';
       await request.save();
       
-      await sendInProcessEmail(request, currentApprover);
-      console.log(`📧 In-process email sent to: ${request.email}`);
+      console.log(`✅ Request approved by ${currentApprover.name}. Next approver: ${nextApprover.name}`);
       
-      await sendNextApproverEmail(request, nextApprover, currentApprover);
-      console.log(`📧 Next approver notification sent to: ${nextApprover.email}`);
+      // Send email notifications
+      try {
+        await sendInProcessEmail(request, currentApprover);
+        await sendNextApproverEmail(request, nextApprover, currentApprover);
+      } catch (emailErr) {
+        console.log("Email error:", emailErr.message);
+      }
       
       res.json({
         success: true,
@@ -345,6 +425,7 @@ exports.approveRequest = async (req, res) => {
         data: request
       });
     } else {
+      // All approvals complete
       request.status = 'Approved';
       request.approvedAt = new Date();
       request.approvedBy = req.user.name;
@@ -352,8 +433,13 @@ exports.approveRequest = async (req, res) => {
       request.completionDate = new Date();
       await request.save();
       
-      await sendApprovedEmail(request, currentApprover);
-      console.log(`📧 Approval email sent to: ${request.email}`);
+      console.log(`✅ Request fully approved by ${currentApprover.name}`);
+      
+      try {
+        await sendApprovedEmail(request, currentApprover);
+      } catch (emailErr) {
+        console.log("Email error:", emailErr.message);
+      }
       
       res.json({
         success: true,
@@ -363,15 +449,21 @@ exports.approveRequest = async (req, res) => {
     }
   } catch (error) {
     console.error("Approve Request Error:", error);
-    res.status(500).json({ success: false, message: error.message || "Failed to approve request" });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || "Failed to approve request" 
+    });
   }
 };
 
-// Reject Request
+// Reject Request - FIXED
 exports.rejectRequest = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    
+    console.log(`📤 Rejecting request: ${id}`);
+    console.log(`User: ${req.user?.email}`);
     
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid request ID format" });
@@ -382,20 +474,32 @@ exports.rejectRequest = async (req, res) => {
       return res.status(404).json({ success: false, message: "Request not found" });
     }
     
-    if (!request.canUserApprove(req.user.email)) {
-      return res.status(403).json({ success: false, message: "You are not authorized to reject this request" });
+    // Find current pending approver
+    const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
+    if (pendingApprovers.length === 0) {
+      return res.status(400).json({ success: false, message: "No pending approvals found for this request" });
     }
     
-    const currentApprover = request.stakeholders.find(
-      s => s.email === req.user.email && s.status === 'Pending'
-    );
+    // Sort by approval order
+    pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+    const currentApprover = pendingApprovers[0];
     
-    if (currentApprover) {
-      currentApprover.status = 'Rejected';
-      currentApprover.remarks = comments;
-      currentApprover.dateTime = new Date();
-      currentApprover.approvedBy = req.user.name;
+    console.log(`Current approver: ${currentApprover?.name} (${currentApprover?.email})`);
+    console.log(`User email: ${req.user?.email}`);
+    
+    // Check if current user is the approver
+    if (currentApprover.email !== req.user.email) {
+      return res.status(403).json({ 
+        success: false, 
+        message: `You are not authorized to reject this request. This request is pending approval from ${currentApprover.name} (${currentApprover.email}).` 
+      });
     }
+    
+    // Update current approver
+    currentApprover.status = 'Rejected';
+    currentApprover.remarks = comments;
+    currentApprover.dateTime = new Date();
+    currentApprover.approvedBy = req.user.name;
     
     request.status = 'Rejected';
     request.rejectedAt = new Date();
@@ -404,8 +508,13 @@ exports.rejectRequest = async (req, res) => {
     
     await request.save();
     
-    await sendRejectedEmail(request, currentApprover);
-    console.log(`📧 Rejection email sent to: ${request.email}`);
+    console.log(`✅ Request rejected by ${currentApprover.name}`);
+    
+    try {
+      await sendRejectedEmail(request, currentApprover);
+    } catch (emailErr) {
+      console.log("Email error:", emailErr.message);
+    }
     
     res.json({
       success: true,
@@ -414,7 +523,10 @@ exports.rejectRequest = async (req, res) => {
     });
   } catch (error) {
     console.error("Reject Request Error:", error);
-    res.status(500).json({ success: false, message: error.message || "Failed to reject request" });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || "Failed to reject request" 
+    });
   }
 };
 
@@ -502,9 +614,16 @@ exports.getDashboardStats = async (req, res) => {
         'stakeholders.status': 'Pending',
         status: { $in: ['Pending', 'In-Process'] }
       });
-      myPendingApprovals = myPendingRequests.filter(r => 
-        r.canUserApprove ? r.canUserApprove(req.user.email) : false
-      ).length;
+      
+      myPendingApprovals = myPendingRequests.filter(request => {
+        const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
+        if (pendingApprovers.length > 0) {
+          pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+          const currentApprover = pendingApprovers[0];
+          return currentApprover && currentApprover.email === req.user.email;
+        }
+        return false;
+      }).length;
     }
     
     const totalAmount = await Request.aggregate([
@@ -592,11 +711,21 @@ exports.getApprovalWorkflow = async (req, res) => {
       return res.status(404).json({ success: false, message: "Request not found" });
     }
     
+    // Find current approver
+    let currentApprover = null;
+    if (request.stakeholders && request.stakeholders.length > 0) {
+      const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
+      if (pendingApprovers.length > 0) {
+        pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+        currentApprover = pendingApprovers[0];
+      }
+    }
+    
     const workflow = {
       requestId: request._id,
       title: request.title,
       status: request.status,
-      currentApprover: request.getCurrentApprover ? request.getCurrentApprover() : null,
+      currentApprover: currentApprover,
       stakeholders: request.stakeholders,
       completedAt: request.completionDate,
       createdAt: request.createdAt
@@ -639,16 +768,6 @@ exports.testEmail = async (req, res) => {
       type: type || 'new'
     });
     
-    // Create a simple email service if not exists
-    let sendEmailFunction;
-    try {
-      const emailService = require("../services/email.service");
-      sendEmailFunction = emailService.sendNewRequestEmail;
-    } catch (err) {
-      console.log("Email service not found, using fallback");
-    }
-    
-    // Simple HTML email template for testing
     const emailHtml = `
       <!DOCTYPE html>
       <html>
@@ -691,7 +810,6 @@ exports.testEmail = async (req, res) => {
     
     const emailText = `Test Email from LCGC RFQ\n\nType: ${type || 'New Request'}\nPrimary: ${email}\nCC: ${ccArray.join(', ') || 'None'}\n\nThis is a test to verify CC functionality.`;
     
-    // Send email using Resend
     const { Resend } = require('resend');
     const resendClient = new Resend(process.env.RESEND_API_KEY);
     
