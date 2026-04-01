@@ -11,6 +11,7 @@ const dashboardRoutes = require("./routes/dashboard.routes");
 const requestRoutes = require("./routes/request.routes");
 const vendorRoutes = require("./routes/vendor.routes");
 const partRoutes = require("./routes/part.routes");
+const userRoutes = require("./routes/user.routes"); // Added user routes
 
 const app = express();
 
@@ -44,6 +45,8 @@ app.use("/api/request", requestRoutes);
 app.use("/api/vendor", vendorRoutes);
 app.use("/api/part", partRoutes);
 app.use("/api/user-rights", require("./routes/userRight.routes"));
+app.use("/api/users", userRoutes); // Added user routes
+
 /* ================= HEALTH CHECK ================= */
 app.get("/", (req, res) => {
   res.json({
