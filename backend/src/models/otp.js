@@ -1,35 +1,16 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
 const otpSchema = new mongoose.Schema({
-  email: { 
-    type: String, 
-    required: true,
-    lowercase: true,
-    trim: true,
-    index: true
-  },
-  otp: { 
-    type: String, 
-    required: true,
-    minlength: 6,
-    maxlength: 6
-  },
-  purpose: {
-    type: String,
-    enum: ['login', 'registration', 'password_reset'],
-    default: 'login'
-  },
-  expiresAt: { 
-    type: Date, 
-    required: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
+  email: { type: String, lowercase: true, sparse: true },
+  mobile: { type: String, sparse: true },
+  otp: { type: String, required: true },
+  type: { type: String, enum: ['login', 'registration', 'reset'], required: true },
+  referenceSid: { type: String }, // For Twilio Verify reference
+  expiresAt: { type: Date, required: true },
+  createdAt: { type: Date, default: Date.now }
 });
 
-// Auto-delete expired OTPs
+// Auto delete expired OTPs
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-module.exports = mongoose.model("OTP", otpSchema);
+module.exports = mongoose.model('OTP', otpSchema);
