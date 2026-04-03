@@ -11,7 +11,7 @@ const dashboardRoutes = require("./routes/dashboard.routes");
 const requestRoutes = require("./routes/request.routes");
 const vendorRoutes = require("./routes/vendor.routes");
 const partRoutes = require("./routes/part.routes");
-const userRoutes = require("./routes/user.routes"); // Added user routes
+const userRoutes = require("./routes/user.routes");
 
 const app = express();
 
@@ -19,7 +19,7 @@ const app = express();
 connectDB();
 
 /* ================= MIDDLEWARE ================= */
-// CORS middleware - This handles OPTIONS preflight automatically
+// CORS middleware
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -44,8 +44,15 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/request", requestRoutes);
 app.use("/api/vendor", vendorRoutes);
 app.use("/api/part", partRoutes);
-app.use("/api/user-rights", require("./routes/userRight.routes"));
-app.use("/api/users", userRoutes); // Added user routes
+app.use("/api/users", userRoutes);
+
+// Check if user-rights route exists before using it
+try {
+  const userRightRoutes = require("./routes/userRight.routes");
+  app.use("/api/user-rights", userRightRoutes);
+} catch (error) {
+  console.log("⚠️ userRight.routes not found, skipping...");
+}
 
 /* ================= HEALTH CHECK ================= */
 app.get("/", (req, res) => {

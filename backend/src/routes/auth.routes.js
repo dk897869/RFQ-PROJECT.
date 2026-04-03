@@ -5,18 +5,15 @@ const { verifyToken } = require("../middlewares/auth");
 
 // ====================== PUBLIC ROUTES ======================
 
-// Registration OTP Routes
-router.post("/send-registration-otp", authController.sendRegistrationOTP);
-router.post("/verify-registration-otp", authController.verifyRegistrationOTP);
-
-// Email OTP Routes
-router.post("/send-email-otp", authController.sendEmailOTP);
-router.post("/send-sms-otp", authController.sendSMSOTP);
-router.post("/verify-otp", authController.verifyOTP);
-
-// Traditional Auth Routes
+// Registration Routes
 router.post("/register", authController.register);
 router.post("/login", authController.login);
+router.post("/send-registration-otp", authController.sendRegistrationOTP);
+router.post("/verify-registration-OTP", authController.verifyRegistrationOTP);
+
+// OTP Routes
+router.post("/send-email-otp", authController.sendEmailOTP);
+router.post("/verify-otp", authController.verifyOTP);
 
 // Forgot Password Routes
 router.post("/forgot-password/send-otp", authController.sendForgotPasswordOTP);
