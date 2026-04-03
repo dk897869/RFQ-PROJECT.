@@ -5,7 +5,7 @@ const otpSchema = new mongoose.Schema({
   mobile: { type: String, sparse: true },
   otp: { type: String, required: true },
   type: { type: String, enum: ['login', 'registration', 'reset'], required: true },
-  referenceSid: { type: String }, // For Twilio Verify reference
+  referenceSid: { type: String },
   expiresAt: { type: Date, required: true },
   createdAt: { type: Date, default: Date.now }
 });
@@ -13,4 +13,7 @@ const otpSchema = new mongoose.Schema({
 // Auto delete expired OTPs
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-module.exports = mongoose.model('OTP', otpSchema);
+// Check if model already exists
+const OTP = mongoose.models.OTP || mongoose.model('OTP', otpSchema);
+
+module.exports = OTP;

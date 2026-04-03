@@ -7,18 +7,29 @@ const stakeholderSchema = new mongoose.Schema({
   line: { type: String, enum: ['Parallel', 'Sequential'], default: 'Sequential' },
   status: { 
     type: String, 
-    enum: ['Pending', 'Approved', 'Rejected'],
+    enum: ['Pending', 'Approved', 'Rejected', 'In-Process'],
     default: 'Pending' 
   },
   remarks: { type: String, default: '' },
   dateTime: { type: Date, default: null },
-  approvalOrder: { type: Number, required: true }
+  approvedBy: { type: String },
+  approvalOrder: { type: Number, required: true },
+  notificationSent: { type: Boolean, default: false },
+  viewedAt: { type: Date }
+});
+
+const attachmentSchema = new mongoose.Schema({
+  serialNo: { type: Number },
+  name: { type: String },
+  fileSize: { type: String },
+  remark: { type: String },
+  fileUrl: { type: String }
 });
 
 const requestSchema = new mongoose.Schema({
   requester: { type: String, required: true },
   department: { type: String, required: true },
-  email: { type: String, required: true },
+  email: { type: String, required: true, lowercase: true },
   contactNo: { type: String, default: '' },
   organization: { type: String, default: 'Radiant Appliances' },
   title: { type: String, required: true },
@@ -37,26 +48,40 @@ const requestSchema = new mongoose.Schema({
     default: 'Pending' 
   },
   stakeholders: [stakeholderSchema],
+  attachments: [attachmentSchema],
   ccList: [{ type: String }],
   requestDate: { type: String, default: '' },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-});
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  createdByName: { type: String },
+  approvedBy: { type: String },
+  approvedAt: { type: Date },
+  approvalComments: { type: String },
+  rejectedBy: { type: String },
+  rejectedAt: { type: Date },
+  rejectionReason: { type: String },
+  completionDate: { type: Date },
+  currentApproverIndex: { type: Number, default: 0 }
+}, { timestamps: true });
 
 // Method to get current pending approver
 requestSchema.methods.getCurrentApprover = function() {
-  const pending = this.stakeholders.filter(s => s.status === 'Pending');
-  if (pending.length > 0) {
-    pending.sort((a, b) => a.approvalOrder - b.approvalOrder);
-    return pending[0];
+  if (!this.stakeholders || this.stakeholders.length === 0) return null;
+  const pendingApprovers = this.stakeholders.filter(s => s.status === 'Pending');
+  if (pendingApprovers.length > 0) {
+    pendingApprovers.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+    return pendingApprovers[0];
   }
   return null;
 };
 
 // Method to check if user can approve
 requestSchema.methods.canUserApprove = function(userEmail) {
-  const current = this.getCurrentApprover();
-  return current && current.email === userEmail;
+  if (!userEmail || !this.stakeholders || this.stakeholders.length === 0) return false;
+  const currentApprover = this.getCurrentApprover();
+  return currentApprover && currentApprover.email === userEmail;
 };
 
-module.exports = mongoose.model('Request', requestSchema);
+// Check if model already exists
+const Request = mongoose.models.Request || mongoose.model('Request', requestSchema);
+
+module.exports = Request;

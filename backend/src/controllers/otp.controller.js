@@ -1,5 +1,5 @@
 const User = require('../models/user');
-const OTP = require('../models/otp');
+const OTP = require('../models/otp.model');
 const { sendSmsOtp, verifySmsOtp, sendEmailOtp } = require('../services/twilio.service');
 
 // Generate random 6-digit OTP for email

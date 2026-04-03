@@ -1,20 +1,23 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
-// Check if the model already exists to prevent overwrite error
+// Check if model already exists to prevent overwrite error
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true },
   role: { 
     type: String, 
-    enum: ['Admin', 'Manager', 'User', 'Approver'],
-    default: 'User'
+    enum: ['Admin', 'Manager', 'VP', 'User', 'Approver'],
+    default: 'Manager'
   },
-  designation: { type: String },
-  department: { type: String },
-  contactNo: { type: String },
-  organization: { type: String, default: 'Radiant Appliances' },
+  contactNo: { type: String, trim: true, default: '' },
+  phone: { type: String, trim: true, default: '' },
+  department: { type: String, trim: true, default: 'Purchase' },
+  designation: { type: String, trim: true, default: '' },
+  organization: { type: String, trim: true, default: 'Radiant Appliances' },
+  dateOfBirth: { type: Date },
+  lastLogin: { type: Date },
   isActive: { type: Boolean, default: true },
   rights: {
     epApproval: { type: Boolean, default: false },
@@ -33,10 +36,39 @@ const userSchema = new mongoose.Schema({
     planStock: { type: Boolean, default: false },
     supplierPerformance: { type: Boolean, default: false },
     vehicularMs: { type: Boolean, default: false }
-  },
-  lastLogin: { type: Date },
-  createdAt: { type: Date, default: Date.now }
-}, { timestamps: true });
+  }
+}, { 
+  timestamps: true 
+});
+
+// Virtual for age calculation
+userSchema.virtual('age').get(function() {
+  if (!this.dateOfBirth) return null;
+  const today = new Date();
+  const birthDate = new Date(this.dateOfBirth);
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+    age--;
+  }
+  return age;
+});
+
+// Virtual to check if today is birthday
+userSchema.virtual('isBirthdayToday').get(function() {
+  if (!this.dateOfBirth) return false;
+  const today = new Date();
+  const birthDate = new Date(this.dateOfBirth);
+  return today.getMonth() === birthDate.getMonth() && 
+         today.getDate() === birthDate.getDate();
+});
+
+// Virtual for formatted birthday
+userSchema.virtual('birthdayFormatted').get(function() {
+  if (!this.dateOfBirth) return null;
+  const date = new Date(this.dateOfBirth);
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+});
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {
@@ -50,7 +82,7 @@ userSchema.methods.comparePassword = async function(password) {
   return await bcrypt.compare(password, this.password);
 };
 
-// Check if model already exists to prevent OverwriteModelError
+// Check if model already exists before creating
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
 module.exports = User;
