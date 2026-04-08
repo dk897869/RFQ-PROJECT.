@@ -24,7 +24,7 @@ try {
 
 const generateToken = (user) => {
   return jwt.sign(
-    { id: user._id, email: user.email, role: user.role },
+    { id: user._id, email: user.email, role: user.role, rights: user.rights || {} },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES || "7d" }
   );
@@ -341,7 +341,8 @@ exports.verifyOTP = async (req, res) => {
         role: user.role,
         department: user.department,
         contactNo: user.contactNo,
-        organization: user.organization
+        organization: user.organization,
+        rights: user.rights || {}
       }
     });
 
@@ -379,7 +380,8 @@ exports.register = async (req, res) => {
       department: department || 'Purchase',
       contactNo: contactNo || '',
       organization: organization || 'Radiant Appliances',
-      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null
+      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+      rights: {}
     });
 
     await user.save();
@@ -397,7 +399,8 @@ exports.register = async (req, res) => {
         role: user.role,
         department: user.department,
         contactNo: user.contactNo,
-        organization: user.organization
+        organization: user.organization,
+        rights: user.rights || {}
       }
     });
 
@@ -444,7 +447,8 @@ exports.login = async (req, res) => {
         role: user.role,
         department: user.department,
         contactNo: user.contactNo,
-        organization: user.organization
+        organization: user.organization,
+        rights: user.rights || {}
       }
     });
 
@@ -465,6 +469,45 @@ exports.getMe = async (req, res) => {
     res.json({ success: true, user });
   } catch (error) {
     console.error("Get Me error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== REFRESH USER SESSION (NEW) ====================
+
+exports.refreshUserSession = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+    
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    
+    // Generate new token with updated rights
+    const newToken = generateToken(user);
+    
+    res.json({
+      success: true,
+      message: "Session refreshed successfully",
+      token: newToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        department: user.department,
+        contactNo: user.contactNo,
+        organization: user.organization,
+        rights: user.rights || {}
+      }
+    });
+  } catch (error) {
+    console.error("Refresh session error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
