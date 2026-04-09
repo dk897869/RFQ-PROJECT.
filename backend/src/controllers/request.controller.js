@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const Request = require('../models/request');
+const Request = require('../models/request');   // Your model
 
 // Simple middleware to simulate auth for testing
 const mockAuth = (req, res, next) => {
@@ -30,12 +30,12 @@ exports.getRequestById = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid ID format' });
     }
-    
+   
     const request = await Request.findById(id);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-    
+   
     res.json({ success: true, data: request });
   } catch (error) {
     console.error('Get request error:', error);
@@ -47,7 +47,7 @@ exports.getRequestById = async (req, res) => {
 exports.createRequest = async (req, res) => {
   try {
     console.log('📤 Creating request with body:', JSON.stringify(req.body, null, 2));
-    
+   
     const {
       requester,
       department,
@@ -62,8 +62,8 @@ exports.createRequest = async (req, res) => {
       objective,
       stakeholders,
       ccList
-    } = req.body;
-    
+    } = req.body || {};
+   
     // Validate required fields
     if (!requester) return res.status(400).json({ success: false, message: 'requester is required' });
     if (!department) return res.status(400).json({ success: false, message: 'department is required' });
@@ -71,7 +71,7 @@ exports.createRequest = async (req, res) => {
     if (!amount || amount <= 0) return res.status(400).json({ success: false, message: 'valid amount is required' });
     if (!vendor) return res.status(400).json({ success: false, message: 'vendor is required' });
     if (!email) return res.status(400).json({ success: false, message: 'email is required' });
-    
+   
     // Process stakeholders
     let processedStakeholders = [];
     if (stakeholders && Array.isArray(stakeholders) && stakeholders.length > 0) {
@@ -88,29 +88,11 @@ exports.createRequest = async (req, res) => {
     } else {
       // Default stakeholders
       processedStakeholders = [
-        {
-          name: "Vijay Parashar",
-          email: "vijay@example.com",
-          designation: "Manager",
-          line: "Parallel",
-          approvalOrder: 1,
-          status: "Pending",
-          remarks: "",
-          dateTime: null
-        },
-        {
-          name: "Ravib",
-          email: "ravib@example.com",
-          designation: "A-GM",
-          line: "Parallel",
-          approvalOrder: 2,
-          status: "Pending",
-          remarks: "",
-          dateTime: null
-        }
+        { name: "Vijay Parashar", email: "vijay@example.com", designation: "Manager", line: "Parallel", approvalOrder: 1, status: "Pending", remarks: "", dateTime: null },
+        { name: "Ravib", email: "ravib@example.com", designation: "A-GM", line: "Parallel", approvalOrder: 2, status: "Pending", remarks: "", dateTime: null }
       ];
     }
-    
+   
     // Process CC list
     let processedCCList = [];
     if (ccList) {
@@ -120,7 +102,7 @@ exports.createRequest = async (req, res) => {
         processedCCList = ccList.filter(e => e && e.trim());
       }
     }
-    
+   
     const requestData = {
       requester: requester.trim(),
       department: department.trim(),
@@ -140,22 +122,22 @@ exports.createRequest = async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     };
-    
+   
     const newRequest = new Request(requestData);
     const savedRequest = await newRequest.save();
-    
+   
     console.log('✅ Request created:', savedRequest._id);
-    
+   
     res.status(201).json({
       success: true,
       message: 'EP Request created successfully',
       data: savedRequest
     });
-    
+   
   } catch (error) {
     console.error('❌ Create request error:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
@@ -166,21 +148,20 @@ exports.createRequest = async (req, res) => {
 exports.updateRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid ID format' });
     }
-    
+   
     const updated = await Request.findByIdAndUpdate(
       id,
       { ...req.body, updatedAt: new Date() },
       { new: true, runValidators: true }
     );
-    
+   
     if (!updated) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-    
+   
     res.json({ success: true, message: 'Request updated', data: updated });
   } catch (error) {
     console.error('Update error:', error);
@@ -192,16 +173,15 @@ exports.updateRequest = async (req, res) => {
 exports.deleteRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid ID format' });
     }
-    
+   
     const deleted = await Request.findByIdAndDelete(id);
     if (!deleted) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-    
+   
     res.json({ success: true, message: 'Request deleted' });
   } catch (error) {
     console.error('Delete error:', error);
@@ -213,41 +193,47 @@ exports.deleteRequest = async (req, res) => {
 exports.approveRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { comments } = req.body;
-    
+    const { comments = '' } = req.body || {};   // Safe destructuring
+   
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid ID format' });
     }
-    
+   
     const request = await Request.findById(id);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-    
+   
     const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
     if (pendingApprovers.length === 0) {
       return res.status(400).json({ success: false, message: 'No pending approvals' });
     }
-    
+   
     pendingApprovers.sort((a, b) => a.approvalOrder - b.approvalOrder);
     const currentApprover = pendingApprovers[0];
-    
+   
     currentApprover.status = 'Approved';
     currentApprover.remarks = comments || currentApprover.remarks;
     currentApprover.dateTime = new Date();
-    
+   
     const nextApprover = request.stakeholders.find(s => s.status === 'Pending');
-    
+   
     if (nextApprover) {
       request.status = 'In-Process';
-      await request.save();
-      res.json({ success: true, message: `Approved by ${currentApprover.name}. Next: ${nextApprover.name}`, data: request });
     } else {
       request.status = 'Approved';
       request.approvedAt = new Date();
-      await request.save();
-      res.json({ success: true, message: 'Request fully approved!', data: request });
     }
+   
+    await request.save();
+   
+    res.json({ 
+      success: true, 
+      message: nextApprover 
+        ? `Approved by ${currentApprover.name}. Next: ${nextApprover.name}` 
+        : 'Request fully approved!', 
+      data: request 
+    });
   } catch (error) {
     console.error('Approve error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -258,33 +244,34 @@ exports.approveRequest = async (req, res) => {
 exports.rejectRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { comments } = req.body;
-    
+    const { comments = '' } = req.body || {};   // Safe destructuring
+   
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid ID format' });
     }
-    
+   
     const request = await Request.findById(id);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-    
+   
     const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
     if (pendingApprovers.length === 0) {
       return res.status(400).json({ success: false, message: 'No pending approvals' });
     }
-    
-    pendingApprovers.sort((a, b) => a.approvalOrder - b.approvalOrder);
-    const currentApprover = pendingApprovers[0];
-    
+   
+    const currentApprover = pendingApprovers.sort((a, b) => a.approvalOrder - b.approvalOrder)[0];
+   
     currentApprover.status = 'Rejected';
     currentApprover.remarks = comments;
     currentApprover.dateTime = new Date();
-    
+   
     request.status = 'Rejected';
     request.rejectionReason = comments || 'Rejected by approver';
+    request.rejectedAt = new Date();
+   
     await request.save();
-    
+   
     res.json({ success: true, message: 'Request rejected', data: request });
   } catch (error) {
     console.error('Reject error:', error);
@@ -300,7 +287,7 @@ exports.getDashboardStats = async (req, res) => {
     const approved = await Request.countDocuments({ status: 'Approved' });
     const rejected = await Request.countDocuments({ status: 'Rejected' });
     const inProcess = await Request.countDocuments({ status: 'In-Process' });
-    
+   
     res.json({
       success: true,
       data: { total, pending, approved, rejected, inProcess }
@@ -330,7 +317,7 @@ exports.getMyPendingRequests = async (req, res) => {
       'stakeholders.status': 'Pending',
       status: { $in: ['Pending', 'In-Process'] }
     }).sort({ createdAt: -1 });
-    
+   
     res.json({ success: true, data: requests, count: requests.length });
   } catch (error) {
     console.error('Get pending error:', error);
@@ -342,13 +329,38 @@ exports.getMyPendingRequests = async (req, res) => {
 exports.getRequestsByDepartment = async (req, res) => {
   try {
     const { department } = req.params;
-    const requests = await Request.find({ 
-      department: { $regex: new RegExp(department, 'i') } 
+    const requests = await Request.find({
+      department: { $regex: new RegExp(department, 'i') }
     }).sort({ createdAt: -1 });
-    
+   
     res.json({ success: true, data: requests, count: requests.length });
   } catch (error) {
     console.error('Get by department error:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ✅ FIXED: Get unique departments (This was causing the error)
+exports.getDepartments = async (req, res) => {
+  try {
+    const departments = await Request.distinct('department');
+    
+    // Clean empty or null values
+    const cleanDepartments = departments
+      .filter(dept => dept && typeof dept === 'string' && dept.trim() !== '')
+      .sort();
+
+    res.json({
+      success: true,
+      data: cleanDepartments,
+      count: cleanDepartments.length
+    });
+  } catch (error) {
+    console.error('Get departments error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch departments',
+      error: error.message
+    });
   }
 };

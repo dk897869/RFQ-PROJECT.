@@ -4,20 +4,30 @@ const requestController = require('../controllers/request.controller');
 
 // Simple auth middleware (replace with real auth later)
 const auth = (req, res, next) => {
-  req.user = { id: 'test_user', email: 'test@example.com', name: 'Test User' };
+  req.user = { 
+    id: 'test_user', 
+    email: 'test@example.com', 
+    name: 'Test User' 
+  };
   next();
 };
 
-// Use auth middleware for all routes
+// Apply auth to all routes
 router.use(auth);
 
-// Routes
+// ==================== ROUTES ====================
+
 router.get('/', requestController.getRequests);
 router.get('/stats/dashboard', requestController.getDashboardStats);
 router.get('/my-pending', requestController.getMyPendingRequests);
 router.get('/status/:status', requestController.getRequestsByStatus);
-router.get('/department/:department', requestController.getRequestsByDepartment);
+
+// Fixed Routes - Correct function names
+router.get('/department/:department', requestController.getRequestsByDepartment);   // Correct function
+router.get('/departments', requestController.getDepartments);                       // ← This was missing
+
 router.get('/:id', requestController.getRequestById);
+
 router.post('/', requestController.createRequest);
 router.put('/:id', requestController.updateRequest);
 router.patch('/:id/approve', requestController.approveRequest);

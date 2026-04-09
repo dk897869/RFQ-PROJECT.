@@ -457,7 +457,49 @@ exports.login = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+// ====================== EP APPROVAL CONTROLLER METHODS (NEW) ======================
 
+// Get departments for dropdown
+exports.getDepartments = async (req, res) => {
+  try {
+    const departments = await Request.distinct('department');
+    res.json({
+      success: true,
+      data: departments.length ? departments : ['IT', 'Purchase', 'Finance', 'HR', 'Operations']
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get managers for dropdown
+exports.getManagers = async (req, res) => {
+  try {
+    const managers = await User.find({ role: { $in: ['Manager', 'A-GM', 'VP', 'S-VP', 'GM', 'MD'] } })
+      .select('name email designation department');
+    res.json({ success: true, data: managers });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Filtered EP requests for Status & Approvals tab
+exports.getEPRequestsWithFilter = async (req, res) => {
+  try {
+    const { priority, status, department, date, vendor } = req.query;
+    let query = {};
+    if (priority) query.priority = priority;
+    if (status) query.status = status;
+    if (department) query.department = { $regex: department, $options: 'i' };
+    if (vendor) query.vendor = { $regex: vendor, $options: 'i' };
+    if (date) query.requestDate = { $regex: date };
+
+    const requests = await Request.find(query).sort({ createdAt: -1 });
+    res.json({ success: true, data: requests });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 // ==================== GET CURRENT USER ====================
 
 exports.getMe = async (req, res) => {

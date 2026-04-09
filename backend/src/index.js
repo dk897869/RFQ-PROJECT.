@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");   // Added for security (optional but recommended)
 
 const connectDB = require("./config/db");
 
@@ -15,29 +16,37 @@ const userRoutes = require("./routes/user.routes");
 
 const app = express();
 
-/* ================= DATABASE ================= */
+/* ================= DATABASE CONNECTION ================= */
 connectDB();
 
 /* ================= MIDDLEWARE ================= */
-// CORS middleware
+
+// Security headers
+app.use(helmet());
+
+// CORS configuration - More secure than origin: "*"
 app.use(cors({
-  origin: "*",
+  origin: "*",                    // Change to specific frontend URL in production
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "Accept"],
-  credentials: true
+  credentials: true,
+  maxAge: 86400                   // Cache preflight for 24 hours
 }));
 
-// Body parser
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body parsers - MUST be before routes
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Request logger
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url}`);
-  next();
-});
+// Request logger (for development)
+if (process.env.NODE_ENV !== "production") {
+  app.use((req, res, next) => {
+    console.log(`📌 ${req.method} ${req.url}`);
+    next();
+  });
+}
 
 /* ================= ROUTES ================= */
+
 // Register all routes
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
@@ -46,20 +55,22 @@ app.use("/api/vendor", vendorRoutes);
 app.use("/api/part", partRoutes);
 app.use("/api/users", userRoutes);
 
-// Check if user-rights route exists before using it
+// User Rights route with safe loading
 try {
   const userRightRoutes = require("./routes/userRight.routes");
   app.use("/api/user-rights", userRightRoutes);
+  console.log("✅ userRight.routes loaded successfully");
 } catch (error) {
-  console.log("⚠️ userRight.routes not found, skipping...");
+  console.warn("⚠️ userRight.routes not found or failed to load. Skipping...");
 }
 
-/* ================= HEALTH CHECK ================= */
+// Health check route
 app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "API Running Successfully 🚀",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development"
   });
 });
 
@@ -71,14 +82,17 @@ app.use((req, res) => {
   });
 });
 
-/* ================= ERROR HANDLER ================= */
+/* ================= GLOBAL ERROR HANDLER ================= */
 app.use((err, req, res, next) => {
-  console.error("Error:", err.message);
-  console.error("Stack:", err.stack);
-  
+  console.error("🔥 Server Error:", err.message);
+  if (process.env.NODE_ENV !== "production") {
+    console.error("Stack:", err.stack);
+  }
+
   res.status(err.status || 500).json({
     success: false,
-    message: err.message || "Internal Server Error"
+    message: err.message || "Internal Server Error",
+    ...(process.env.NODE_ENV !== "production" && { stack: err.stack })
   });
 });
 
@@ -86,6 +100,7 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📡 CORS enabled for all origins`);
+  console.log(`🛡️  Security headers enabled (Helmet)`);
 });

@@ -5,10 +5,10 @@ const stakeholderSchema = new mongoose.Schema({
   email: { type: String, required: true },
   designation: { type: String, required: true },
   line: { type: String, enum: ['Parallel', 'Sequential'], default: 'Sequential' },
-  status: { 
-    type: String, 
+  status: {
+    type: String,
     enum: ['Pending', 'Approved', 'Rejected', 'In-Process'],
-    default: 'Pending' 
+    default: 'Pending'
   },
   remarks: { type: String, default: '' },
   dateTime: { type: Date, default: null },
@@ -35,17 +35,17 @@ const requestSchema = new mongoose.Schema({
   title: { type: String, required: true },
   amount: { type: Number, required: true },
   vendor: { type: String, required: true },
-  priority: { 
-    type: String, 
+  priority: {
+    type: String,
     enum: ['Low', 'Medium', 'High', 'Urgent'],
-    default: 'Medium' 
+    default: 'Medium'
   },
   description: { type: String, default: '' },
   objective: { type: String, default: '' },
-  status: { 
-    type: String, 
+  status: {
+    type: String,
     enum: ['Pending', 'Approved', 'Rejected', 'In-Process', 'Completed'],
-    default: 'Pending' 
+    default: 'Pending'
   },
   stakeholders: [stakeholderSchema],
   attachments: [attachmentSchema],
@@ -63,7 +63,7 @@ const requestSchema = new mongoose.Schema({
   currentApproverIndex: { type: Number, default: 0 }
 }, { timestamps: true });
 
-// Method to get current pending approver
+// Methods
 requestSchema.methods.getCurrentApprover = function() {
   if (!this.stakeholders || this.stakeholders.length === 0) return null;
   const pendingApprovers = this.stakeholders.filter(s => s.status === 'Pending');
@@ -74,14 +74,13 @@ requestSchema.methods.getCurrentApprover = function() {
   return null;
 };
 
-// Method to check if user can approve
 requestSchema.methods.canUserApprove = function(userEmail) {
   if (!userEmail || !this.stakeholders || this.stakeholders.length === 0) return false;
   const currentApprover = this.getCurrentApprover();
   return currentApprover && currentApprover.email === userEmail;
 };
 
-// Check if model already exists
+// Prevent model overwrite
 const Request = mongoose.models.Request || mongoose.model('Request', requestSchema);
 
 module.exports = Request;
