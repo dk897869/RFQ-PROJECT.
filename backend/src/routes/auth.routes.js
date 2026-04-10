@@ -4,7 +4,6 @@ const authController = require("../controllers/auth.controller");
 const { verifyToken } = require("../middlewares/auth");
 
 // ====================== PUBLIC ROUTES ======================
-
 // Registration Routes
 router.post("/register", authController.register);
 router.post("/login", authController.login);
@@ -29,9 +28,10 @@ router.post("/refresh-session", verifyToken, authController.refreshUserSession);
 router.get("/departments", verifyToken, authController.getDepartments);
 router.get("/managers", verifyToken, authController.getManagers);
 
-// ====================== EP REQUEST ROUTES ======================
-// Stats (before /:id to avoid conflict)
+// ====================== EP REQUEST ROUTES (via auth controller) ======================
+// NOTE: Stats MUST come before /:id to avoid route conflict
 router.get("/ep-requests/stats", verifyToken, authController.getEPRequestStats);
+router.post("/ep-requests/send-email", verifyToken, authController.sendEPRequestEmail);
 
 // CRUD
 router.post("/ep-requests", verifyToken, authController.createEPRequest);
@@ -43,8 +43,5 @@ router.delete("/ep-requests/:id", verifyToken, authController.deleteEPRequest);
 // Approval Actions
 router.patch("/ep-requests/:id/approve", verifyToken, authController.approveEPRequest);
 router.patch("/ep-requests/:id/reject", verifyToken, authController.rejectEPRequest);
-
-// Email / Notification
-router.post("/ep-requests/send-email", verifyToken, authController.sendEPRequestEmail);
 
 module.exports = router;

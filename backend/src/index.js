@@ -52,6 +52,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/request", requestRoutes);
 app.use("/api/vendor", vendorRoutes);
+app.use("/api/rfq", require('./routes/rfq.routes'));
 app.use("/api/part", partRoutes);
 app.use("/api/users", userRoutes);
 

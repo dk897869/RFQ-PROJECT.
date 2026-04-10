@@ -1,9 +1,18 @@
-const router = require("express").Router();
-const ctrl = require("../controllers/rfq.controller");
-const auth = require("../middlewares/auth");
+const express = require('express');
+const router = express.Router();
 
-router.post("/",auth,ctrl.create);
-router.get("/",auth,ctrl.getAll);
-router.put("/:id",auth,ctrl.updateStatus);
+const {
+  getAllRFQs,
+  createRFQ,
+  getRFQById,
+  getVendors,
+  getDepartments
+} = require('../controllers/Rfq.controller');
+
+// RFQ Routes
+router.get('/', getAllRFQs);
+router.post('/', createRFQ);
+router.get('/:id', getRFQById);
+router.get('/vendors', getVendors);
 
 module.exports = router;
