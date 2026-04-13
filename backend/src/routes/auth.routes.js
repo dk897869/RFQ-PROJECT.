@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const authController = require("../controllers/auth.controller");
 const { verifyToken } = require("../middlewares/auth");
+const { uploadProfilePhoto } = require("../middlewares/upload");
 
 // ====================== PUBLIC ROUTES ======================
 // Registration Routes
@@ -14,14 +15,20 @@ router.post("/verify-registration-OTP", authController.verifyRegistrationOTP);
 router.post("/send-email-otp", authController.sendEmailOTP);
 router.post("/send-otp", authController.sendEmailOTP); // alias
 router.post("/verify-otp", authController.verifyOTP);
+router.post("/send-sms-otp", authController.sendSmsOTP);
 
 // Forgot Password Routes
+router.post("/forgot-password", authController.sendForgotPasswordLink);
+router.post("/reset-password", authController.resetPasswordWithToken);
 router.post("/forgot-password/send-otp", authController.sendForgotPasswordOTP);
 router.post("/forgot-password/resend-otp", authController.resendForgotPasswordOTP);
 router.post("/forgot-password/reset", authController.verifyOTPAndResetPassword);
 
 // ====================== PROTECTED ROUTES ======================
 router.get("/me", verifyToken, authController.getMe);
+router.patch("/profile", verifyToken, authController.updateProfile);
+router.patch("/change-password", verifyToken, authController.changePassword);
+router.post("/profile/photo", verifyToken, uploadProfilePhoto.single("photo"), authController.uploadProfilePhoto);
 router.post("/refresh-session", verifyToken, authController.refreshUserSession);
 
 // ====================== DROPDOWN / LOOKUP ROUTES ======================

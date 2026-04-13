@@ -1,24 +1,36 @@
-const User = require("../models/user");
+const User = require("../models/user.model");
 const OTP = require("../models/otp.model");
 const EPRequest = require("../models/request");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { Resend } = require('resend');
+const crypto = require("crypto");
+const { sendMail } = require("../services/mail.service");
+const { sendEpMailWithPdf } = require("../services/epNotify.service");
+const { generateEPApprovalEmailHTML } = require("../templates/epApprovalEmail");
+const { buildEpPdfBuffer } = require("../utils/epPdf");
+const { sendSmsOtp, verifySmsOtp } = require("../services/twilio.service");
 
-// ==================== INITIALIZE RESEND FOR EMAIL ====================
-let resend = null;
-let isResendConfigured = false;
+const SENIOR_APPROVER_ROLES = new Set([
+  "Admin",
+  "Manager",
+  "VP",
+  "GM",
+  "MD",
+  "Director",
+  "AGM",
+  "Approver",
+]);
 
-try {
-  if (process.env.RESEND_API_KEY) {
-    resend = new Resend(process.env.RESEND_API_KEY);
-    isResendConfigured = true;
-    console.log('✅ Resend initialized for Email');
-  } else {
-    console.log('⚠️ Resend API key missing. Email OTP will use console fallback.');
-  }
-} catch (error) {
-  console.log('⚠️ Resend initialization error:', error.message);
+function canActOnEpRequest(user, epDoc) {
+  if (!user || !epDoc) return false;
+  if (user.rights && user.rights.epApproval) return true;
+  if (SENIOR_APPROVER_ROLES.has(user.role)) return true;
+  const u = (user.email || "").toLowerCase();
+  return (epDoc.stakeholders || []).some(
+    (s) =>
+      (s.email || "").toLowerCase() === u &&
+      (s.status === "Pending" || s.status === "In-Process")
+  );
 }
 
 // ==================== HELPER FUNCTIONS ====================
@@ -50,43 +62,17 @@ const saveOTP = async (email, mobile, otp, type) => {
   });
 };
 
-// ==================== EMAIL FUNCTIONS WITH RESEND ====================
+// ==================== EMAIL (SMTP / Resend / SendGrid) ====================
 
 const sendEmailWithResend = async (to, subject, html, text, ccList = []) => {
-  try {
-    if (!resend || !isResendConfigured) {
-      console.log(`📧 [FALLBACK] Email would be sent to: ${to}`);
-      console.log(`Subject: ${subject}`);
-      console.log(`HTML Preview: ${html?.substring(0, 200)}...`);
-      return { success: true, fallback: true };
-    }
-
-    const emailOptions = {
-      from: process.env.FROM_EMAIL || 'onboarding@resend.dev',
-      to: [to],
-      subject: subject,
-      html: html,
-      text: text
-    };
-
-    if (ccList && ccList.length > 0) {
-      emailOptions.cc = ccList;
-    }
-
-    const { data, error } = await resend.emails.send(emailOptions);
-
-    if (error) {
-      console.error('❌ Resend error:', error);
-      return { success: false, error: error.message };
-    }
-
-    console.log('✅ Email sent via Resend:', data?.id);
-    return { success: true, data: data };
-  } catch (error) {
-    console.error('❌ Email send error:', error);
-    console.log(`📧 [FALLBACK] Email would be sent to: ${to}`);
-    return { success: true, fallback: true };
-  }
+  const recipient = Array.isArray(to) ? to[0] : to;
+  return sendMail({
+    to: recipient,
+    cc: ccList?.length ? ccList : undefined,
+    subject,
+    html,
+    text: text || subject,
+  });
 };
 
 const sendEmailOTPCode = async (email, name, otp, type, ccList = []) => {
@@ -158,152 +144,6 @@ const sendEmailOTPCode = async (email, name, otp, type, ccList = []) => {
   const text = `Your OTP for ${title.toLowerCase()} is: ${otp}. Valid for 10 minutes.`;
 
   return await sendEmailWithResend(email, subject, html, text, ccList);
-};
-
-// ==================== EP APPROVAL EMAIL ====================
-
-const generateEPApprovalEmailHTML = (epData) => {
-  const approverRows = (epData.stakeholders || []).map((a, i) => `
-    <tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${i + 1}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${a.line || ''}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${a.name || ''}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${a.designation || ''}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${a.email || ''}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">
-        <span style="padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;background:${a.status === 'Approved' ? '#d1fae5' : a.status === 'Rejected' ? '#fee2e2' : '#fef3c7'};color:${a.status === 'Approved' ? '#10b981' : a.status === 'Rejected' ? '#ef4444' : '#d97706'};">
-          ${a.status || 'Pending'}
-        </span>
-      </td>
-    </tr>
-  `).join('');
-
-  const attachmentRows = (epData.attachments || []).map((att, i) => `
-    <tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${i + 1}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${att.name || ''}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${att.fileSize || ''}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">${att.remark || ''}</td>
-    </tr>
-  `).join('');
-
-  const ccRows = (epData.ccList || []).map(cc => `
-    <tr><td style="padding:6px 12px;border-bottom:1px solid #e2e8f0;">${cc}</td></tr>
-  `).join('');
-
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>EP Approval Request - ${epData.title || ''}</title>
-    </head>
-    <body style="font-family:Arial,sans-serif;margin:0;padding:20px;background:#f4f6f9;color:#1e293b;">
-      <div style="max-width:900px;margin:0 auto;background:white;border-radius:12px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.1);">
-        
-        <div style="background:linear-gradient(135deg,#0f2a5e,#1e4a8a);padding:28px 32px;color:white;">
-          <h1 style="margin:0 0 6px;font-size:22px;">EP Approval Request</h1>
-          <p style="margin:0;opacity:0.8;font-size:13px;">Radiant Appliances &bull; ${new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}</p>
-        </div>
-
-        <table style="width:100%;border-collapse:collapse;">
-          <tr>
-            <td style="width:140px;padding:10px 16px;background:#f8fafc;font-weight:700;font-size:13px;color:#475569;border-bottom:1px solid #e2e8f0;">Requester</td>
-            <td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">${epData.requester || ''}</td>
-            <td style="width:140px;padding:10px 16px;background:#f8fafc;font-weight:700;font-size:13px;color:#475569;border-bottom:1px solid #e2e8f0;">Request Date</td>
-            <td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">${epData.requestDate || ''}</td>
-          </tr>
-          <tr>
-            <td style="padding:10px 16px;background:#f8fafc;font-weight:700;font-size:13px;color:#475569;border-bottom:1px solid #e2e8f0;">Department</td>
-            <td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">${epData.department || ''}</td>
-            <td style="padding:10px 16px;background:#f8fafc;font-weight:700;font-size:13px;color:#475569;border-bottom:1px solid #e2e8f0;">Contact No.</td>
-            <td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">${epData.contactNo || ''}</td>
-          </tr>
-          <tr>
-            <td style="padding:10px 16px;background:#f8fafc;font-weight:700;font-size:13px;color:#475569;border-bottom:1px solid #e2e8f0;">Email ID</td>
-            <td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">${epData.email || ''}</td>
-            <td style="padding:10px 16px;background:#f8fafc;font-weight:700;font-size:13px;color:#475569;border-bottom:1px solid #e2e8f0;">Organization</td>
-            <td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">${epData.organization || ''}</td>
-          </tr>
-        </table>
-
-        <div style="padding:20px 24px;background:#f0f4ff;border-bottom:1px solid #e2e8f0;">
-          <h3 style="margin:0 0 12px;color:#0f2a5e;font-size:15px;border-left:4px solid #0f2a5e;padding-left:10px;">Activity Overview</h3>
-          <table style="width:100%;border-collapse:collapse;">
-            <tr>
-              <td style="width:140px;padding:6px 0;font-weight:700;font-size:13px;color:#475569;">Title:</td>
-              <td style="padding:6px 0;font-size:13px;">${epData.title || ''}</td>
-              <td style="width:140px;padding:6px 0;font-weight:700;font-size:13px;color:#475569;">Vendor:</td>
-              <td style="padding:6px 0;font-size:13px;">${epData.vendor || ''}</td>
-            </tr>
-            <tr>
-              <td style="padding:6px 0;font-weight:700;font-size:13px;color:#475569;">Amount:</td>
-              <td style="padding:6px 0;font-size:13px;font-weight:700;color:#1e40af;">₹${Number(epData.amount || 0).toLocaleString('en-IN')}</td>
-              <td style="padding:6px 0;font-weight:700;font-size:13px;color:#475569;">Priority:</td>
-              <td style="padding:6px 0;font-size:13px;">
-                <span style="padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;background:${epData.priority === 'High' || epData.priority === 'Urgent' ? '#fee2e2' : epData.priority === 'Low' ? '#ecfdf5' : '#fef3c7'};color:${epData.priority === 'High' || epData.priority === 'Urgent' ? '#ef4444' : epData.priority === 'Low' ? '#10b981' : '#d97706'};">
-                  ${epData.priority || 'Medium'}
-                </span>
-              </td>
-            </tr>
-          </table>
-          ${epData.description ? `<p style="margin:10px 0 4px;font-weight:700;color:#475569;font-size:13px;">Description / Purpose:</p><p style="margin:0;font-size:13px;">${epData.description}</p>` : ''}
-          ${epData.objective ? `<p style="margin:10px 0 4px;font-weight:700;color:#475569;font-size:13px;">Objective:</p><p style="margin:0;font-size:13px;">${epData.objective}</p>` : ''}
-        </div>
-
-        <div style="padding:20px 24px;border-bottom:1px solid #e2e8f0;">
-          <h3 style="margin:0 0 12px;color:#0f2a5e;font-size:15px;border-left:4px solid #0f2a5e;padding-left:10px;">Approval Chain</h3>
-          <table style="width:100%;border-collapse:collapse;font-size:13px;">
-            <thead>
-              <tr style="background:#f8fafc;">
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">#</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Line</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Stakeholder</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Designation</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Email</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Status</th>
-              </tr>
-            </thead>
-            <tbody>${approverRows}</tbody>
-          </table>
-        </div>
-
-        ${(epData.attachments || []).length > 0 ? `
-        <div style="padding:20px 24px;border-bottom:1px solid #e2e8f0;">
-          <h3 style="margin:0 0 12px;color:#0f2a5e;font-size:15px;border-left:4px solid #0f2a5e;padding-left:10px;">Attachments</h3>
-          <table style="width:100%;border-collapse:collapse;font-size:13px;">
-            <thead>
-              <tr style="background:#f8fafc;">
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">S.No.</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Attachment</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">File Size</th>
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Remark</th>
-              </tr>
-            </thead>
-            <tbody>${attachmentRows}</tbody>
-          </table>
-        </div>` : ''}
-
-        ${(epData.ccList || []).length > 0 ? `
-        <div style="padding:20px 24px;border-bottom:1px solid #e2e8f0;">
-          <h3 style="margin:0 0 12px;color:#0f2a5e;font-size:15px;border-left:4px solid #0f2a5e;padding-left:10px;">CC Recipients</h3>
-          <table style="width:100%;border-collapse:collapse;font-size:13px;">
-            <thead>
-              <tr style="background:#f8fafc;">
-                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #e2e8f0;">Mail ID</th>
-              </tr>
-            </thead>
-            <tbody>${ccRows}</tbody>
-          </table>
-        </div>` : ''}
-
-        <div style="padding:14px 24px;background:#0f2a5e;color:rgba(255,255,255,0.7);font-size:11px;text-align:center;">
-          This document was auto-generated by Radiant Appliances EP Approval System on ${new Date().toLocaleString('en-IN')}
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
 };
 
 // ==================== REGISTRATION OTP ====================
@@ -399,7 +239,7 @@ exports.sendEmailOTP = async (req, res) => {
     }
 
     const user = await User.findOne({ email: email.toLowerCase() });
-    if (!user && type === 'login') {
+    if (!user && (type === 'login' || type === 'reset')) {
       return res.status(404).json({ success: false, message: "Email not registered" });
     }
 
@@ -437,13 +277,20 @@ exports.sendEmailOTP = async (req, res) => {
 
 exports.verifyOTP = async (req, res) => {
   try {
-    const { email, otp, method = 'email', type = 'login' } = req.body;
+    const { email, mobile, otp, method = 'email', type = 'login' } = req.body;
 
-    if (!email || !otp) {
-      return res.status(400).json({ success: false, message: "Email and OTP are required" });
+    if (method === 'email') {
+      if (!email || !otp) {
+        return res.status(400).json({ success: false, message: "Email and OTP are required" });
+      }
+    } else if (method === 'mobile') {
+      if (!mobile || !otp) {
+        return res.status(400).json({ success: false, message: "Mobile and OTP are required" });
+      }
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid method" });
     }
 
-    let isValid = false;
     let user = null;
 
     if (method === 'email') {
@@ -462,9 +309,24 @@ exports.verifyOTP = async (req, res) => {
         return res.status(400).json({ success: false, message: "OTP has expired" });
       }
 
-      isValid = true;
       user = await User.findOne({ email: email.toLowerCase() });
       await OTP.deleteOne({ _id: otpRecord._id });
+    } else {
+      const result = await verifySmsOtp(mobile, otp);
+      if (!result.success) {
+        return res.status(500).json({ success: false, message: result.error || 'SMS verify failed' });
+      }
+      if (!result.isValid) {
+        return res.status(400).json({ success: false, message: 'Invalid OTP' });
+      }
+      const cleanMobile = mobile.replace(/\D/g, '');
+      user = await User.findOne({
+        $or: [
+          { contactNo: { $regex: cleanMobile + '$', $options: 'i' } },
+          { phone: { $regex: cleanMobile + '$', $options: 'i' } },
+        ],
+      });
+      await OTP.deleteMany({ mobile: mobile, type: type });
     }
 
     if (!user) {
@@ -487,6 +349,9 @@ exports.verifyOTP = async (req, res) => {
         department: user.department,
         contactNo: user.contactNo,
         organization: user.organization,
+        profileImage: user.profileImage || '',
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
         rights: user.rights || {}
       }
     });
@@ -514,13 +379,10 @@ exports.register = async (req, res) => {
       return res.status(400).json({ success: false, message: "Email already registered" });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
     const user = new User({
       name: name.trim(),
       email: email.toLowerCase(),
-      password: hashedPassword,
+      password: password,
       role: role || "User",
       department: department || 'Purchase',
       contactNo: contactNo || '',
@@ -537,7 +399,7 @@ exports.register = async (req, res) => {
       success: true,
       message: "User registered successfully",
       token,
-      user: {
+            user: {
         id: user._id,
         name: user.name,
         email: user.email,
@@ -545,6 +407,9 @@ exports.register = async (req, res) => {
         department: user.department,
         contactNo: user.contactNo,
         organization: user.organization,
+        profileImage: user.profileImage || '',
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
         rights: user.rights || {}
       }
     });
@@ -585,7 +450,7 @@ exports.login = async (req, res) => {
       success: true,
       message: "Login successful",
       token,
-      user: {
+            user: {
         id: user._id,
         name: user.name,
         email: user.email,
@@ -593,6 +458,9 @@ exports.login = async (req, res) => {
         department: user.department,
         contactNo: user.contactNo,
         organization: user.organization,
+        profileImage: user.profileImage || '',
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
         rights: user.rights || {}
       }
     });
@@ -639,7 +507,7 @@ exports.refreshUserSession = async (req, res) => {
       success: true,
       message: "Session refreshed successfully",
       token: newToken,
-      user: {
+            user: {
         id: user._id,
         name: user.name,
         email: user.email,
@@ -647,6 +515,9 @@ exports.refreshUserSession = async (req, res) => {
         department: user.department,
         contactNo: user.contactNo,
         organization: user.organization,
+        profileImage: user.profileImage || '',
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
         rights: user.rights || {}
       }
     });
@@ -770,48 +641,19 @@ exports.createEPRequest = async (req, res) => {
       return res.status(500).json({ success: false, message: 'EP Request model not found. Please check your request.js model.' });
     }
 
-    // Send emails to CC list with EP form
-    if (ccList && ccList.length > 0) {
-      const emailHtml = generateEPApprovalEmailHTML({
-        ...req.body,
-        status: initialStatus,
-        stakeholders: validStakeholders
-      });
-
-      const emailText = `EP Approval Request: ${title} | Amount: ₹${Number(amount).toLocaleString('en-IN')} | Priority: ${priority || 'Medium'}`;
-
-      for (const ccEmail of ccList) {
-        try {
-          await sendEmailWithResend(
-            ccEmail,
-            `EP Approval Request: ${title} - ${requester || email}`,
-            emailHtml,
-            emailText
-          );
-          console.log(`✅ EP email sent to CC: ${ccEmail}`);
-        } catch (emailErr) {
-          console.error(`❌ Failed to send email to ${ccEmail}:`, emailErr);
-        }
-      }
-    }
-
-    // Notify first stakeholder in approval chain
-    if (validStakeholders.length > 0) {
-      const firstApprover = validStakeholders.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0))[0];
-      if (firstApprover && firstApprover.email) {
-        const approverHtml = generateEPApprovalEmailHTML({ ...req.body, stakeholders: validStakeholders });
-        await sendEmailWithResend(
-          firstApprover.email,
-          `Action Required: EP Approval Request - ${title}`,
-          approverHtml,
-          `You have a pending EP approval request: ${title}`
-        );
-      }
+    try {
+      await sendEpMailWithPdf(
+        epRequest,
+        `EP Approval Request: ${title} - ${requester || email}`,
+        `EP: ${title} — ${initialStatus}`
+      );
+    } catch (notifyErr) {
+      console.error('EP create notify:', notifyErr.message);
     }
 
     res.status(201).json({
       success: true,
-      message: `EP Request created successfully!${ccList?.length > 0 ? ` Email notifications sent to ${ccList.length} CC recipient(s).` : ''}`,
+      message: `EP Request created successfully! Email with PDF to requester${ccList?.length ? ` (CC: ${ccList.length})` : ''}.`,
       data: { ...epRequest.toObject(), id: epRequest._id }
     });
 
@@ -911,86 +753,48 @@ exports.deleteEPRequest = async (req, res) => {
 
 exports.approveEPRequest = async (req, res) => {
   try {
-    const { comments } = req.body;
-    const userEmail = req.user ? req.user.email : null;
-
+    const { comments = '' } = req.body;
+    const actor = req.user;
     const epRequest = await EPRequest.findById(req.params.id);
     if (!epRequest) {
       return res.status(404).json({ success: false, message: "EP Request not found" });
     }
-
-    // Find the current pending approver
-    const pendingApprovers = epRequest.stakeholders
-      .filter(s => s.status === 'Pending')
-      .sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
-
-    if (pendingApprovers.length === 0) {
-      return res.status(400).json({ success: false, message: "No pending approvers found" });
+    if (['Approved', 'Rejected'].includes(epRequest.status)) {
+      return res.status(400).json({ success: false, message: "Request already finalized" });
     }
-
-    const currentApprover = pendingApprovers[0];
-
-    // Update the current approver's status
-    const approverIndex = epRequest.stakeholders.findIndex(
-      s => s.email === currentApprover.email && s.status === 'Pending'
-    );
-
-    if (approverIndex !== -1) {
-      epRequest.stakeholders[approverIndex].status = 'Approved';
-      epRequest.stakeholders[approverIndex].remarks = comments || '';
-      epRequest.stakeholders[approverIndex].dateTime = new Date().toISOString();
+    if (!canActOnEpRequest(actor, epRequest)) {
+      return res.status(403).json({ success: false, message: "Not authorized to approve this request" });
     }
-
-    // Check if all approvers have approved
-    const remainingPending = epRequest.stakeholders.filter(s => s.status === 'Pending');
-    if (remainingPending.length === 0) {
-      epRequest.status = 'Approved';
-    } else {
-      epRequest.status = 'In-Process';
-    }
-
+    const nowIso = new Date().toISOString();
+    const label = actor.name || actor.email || 'Approver';
+    epRequest.stakeholders.forEach((s) => {
+      if (s.status === 'Pending' || s.status === 'In-Process') {
+        s.status = 'Approved';
+        s.remarks = comments ? `${label}: ${comments}` : `${label}: Approved`;
+        s.dateTime = nowIso;
+      }
+    });
+    epRequest.status = 'Approved';
+    epRequest.approvedBy = label;
+    epRequest.approvedAt = new Date();
+    epRequest.approvalComments = comments;
     await epRequest.save();
 
-    // Send email notification to requester
-    const approvalHtml = `
-      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-        <div style="background:linear-gradient(135deg,#10b981,#059669);padding:24px;color:white;border-radius:12px 12px 0 0;">
-          <h2 style="margin:0;">✅ EP Request ${epRequest.status === 'Approved' ? 'Fully Approved' : 'Partially Approved'}</h2>
-        </div>
-        <div style="padding:24px;background:white;border:1px solid #e2e8f0;border-radius:0 0 12px 12px;">
-          <p>Your EP Approval Request "<strong>${epRequest.title}</strong>" has been approved by <strong>${currentApprover.name}</strong>.</p>
-          <p><strong>Comments:</strong> ${comments || 'No comments'}</p>
-          <p><strong>Current Status:</strong> ${epRequest.status}</p>
-          ${remainingPending.length > 0 ? `<p><strong>Next Approver:</strong> ${remainingPending[0].name} (${remainingPending[0].designation})</p>` : '<p>🎉 All approvals completed!</p>'}
-        </div>
-      </div>
-    `;
-
-    await sendEmailWithResend(
-      epRequest.email,
-      `EP Request ${epRequest.status === 'Approved' ? 'Approved' : 'Partially Approved'}: ${epRequest.title}`,
-      approvalHtml,
-      `Your EP request "${epRequest.title}" has been approved by ${currentApprover.name}.`
-    );
-
-    // Notify next approver if any
-    if (remainingPending.length > 0) {
-      const nextApprover = remainingPending[0];
-      const nextApproverHtml = generateEPApprovalEmailHTML(epRequest.toObject());
-      await sendEmailWithResend(
-        nextApprover.email,
-        `Action Required: EP Approval Request - ${epRequest.title}`,
-        nextApproverHtml,
-        `You have a pending EP approval request: ${epRequest.title}`
+    try {
+      await sendEpMailWithPdf(
+        epRequest,
+        `EP Approved: ${epRequest.title}`,
+        `Approved by ${label}`
       );
+    } catch (e) {
+      console.error('EP approve notify:', e.message);
     }
 
     res.json({
       success: true,
-      message: epRequest.status === 'Approved'
-        ? '✅ Request fully approved! All stakeholders notified.'
-        : `✅ Approval recorded. Next approver (${remainingPending[0]?.name}) has been notified.`,
-      data: epRequest
+      toast: 'success',
+      message: 'Request approved. CC list notified with PDF.',
+      data: epRequest,
     });
   } catch (error) {
     console.error("Approve EP Request error:", error);
@@ -1002,58 +806,48 @@ exports.approveEPRequest = async (req, res) => {
 
 exports.rejectEPRequest = async (req, res) => {
   try {
-    const { comments } = req.body;
-
+    const { comments = '' } = req.body;
+    const actor = req.user;
     const epRequest = await EPRequest.findById(req.params.id);
     if (!epRequest) {
       return res.status(404).json({ success: false, message: "EP Request not found" });
     }
-
-    const pendingApprovers = epRequest.stakeholders
-      .filter(s => s.status === 'Pending')
-      .sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
-
-    const currentApprover = pendingApprovers[0];
-
-    if (currentApprover) {
-      const approverIndex = epRequest.stakeholders.findIndex(
-        s => s.email === currentApprover.email && s.status === 'Pending'
-      );
-      if (approverIndex !== -1) {
-        epRequest.stakeholders[approverIndex].status = 'Rejected';
-        epRequest.stakeholders[approverIndex].remarks = comments || '';
-        epRequest.stakeholders[approverIndex].dateTime = new Date().toISOString();
-      }
+    if (['Approved', 'Rejected'].includes(epRequest.status)) {
+      return res.status(400).json({ success: false, message: "Request already finalized" });
     }
-
+    if (!canActOnEpRequest(actor, epRequest)) {
+      return res.status(403).json({ success: false, message: "Not authorized to reject this request" });
+    }
+    const nowIso = new Date().toISOString();
+    const label = actor.name || actor.email || 'Approver';
+    epRequest.stakeholders.forEach((s) => {
+      if (s.status === 'Pending' || s.status === 'In-Process') {
+        s.status = 'Rejected';
+        s.remarks = comments ? `${label}: ${comments}` : `${label}: Rejected`;
+        s.dateTime = nowIso;
+      }
+    });
     epRequest.status = 'Rejected';
+    epRequest.rejectionReason = comments;
+    epRequest.rejectedBy = label;
+    epRequest.rejectedAt = new Date();
     await epRequest.save();
 
-    // Notify requester of rejection
-    const rejectionHtml = `
-      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-        <div style="background:linear-gradient(135deg,#ef4444,#dc2626);padding:24px;color:white;border-radius:12px 12px 0 0;">
-          <h2 style="margin:0;">❌ EP Request Rejected</h2>
-        </div>
-        <div style="padding:24px;background:white;border:1px solid #e2e8f0;border-radius:0 0 12px 12px;">
-          <p>Your EP Approval Request "<strong>${epRequest.title}</strong>" has been rejected by <strong>${currentApprover?.name || 'Approver'}</strong>.</p>
-          <p><strong>Reason:</strong> ${comments || 'No reason provided'}</p>
-          <p>Please review and resubmit if necessary.</p>
-        </div>
-      </div>
-    `;
-
-    await sendEmailWithResend(
-      epRequest.email,
-      `EP Request Rejected: ${epRequest.title}`,
-      rejectionHtml,
-      `Your EP request "${epRequest.title}" has been rejected. Reason: ${comments}`
-    );
+    try {
+      await sendEpMailWithPdf(
+        epRequest,
+        `EP Rejected: ${epRequest.title}`,
+        `Rejected by ${label}`
+      );
+    } catch (e) {
+      console.error('EP reject notify:', e.message);
+    }
 
     res.json({
       success: true,
-      message: '❌ Request rejected. Requester has been notified.',
-      data: epRequest
+      toast: 'error',
+      message: 'Request rejected. CC list notified with PDF.',
+      data: epRequest,
     });
   } catch (error) {
     console.error("Reject EP Request error:", error);
@@ -1098,23 +892,33 @@ exports.sendEPRequestEmail = async (req, res) => {
     }
 
     const emailHtml = generateEPApprovalEmailHTML(epData);
-    const emailText = `EP Approval Request: ${epData.title} | Amount: ₹${Number(epData.amount || 0).toLocaleString('en-IN')}`;
+    const emailText = `EP Approval Request: ${epData.title} | Amount: INR ${Number(epData.amount || 0).toLocaleString('en-IN')}`;
+    let pdf;
+    try {
+      pdf = await buildEpPdfBuffer(epData);
+    } catch (e) {
+      console.error('EP PDF:', e.message);
+    }
 
+    const list = Array.isArray(toEmails) ? toEmails : [toEmails];
     const results = [];
-    for (const toEmail of toEmails) {
-      const result = await sendEmailWithResend(
-        toEmail,
-        `EP Approval Request: ${epData.title}`,
-        emailHtml,
-        emailText,
-        ccEmails || []
-      );
+    for (const toEmail of list) {
+      const result = await sendMail({
+        to: toEmail,
+        cc: ccEmails?.length ? ccEmails : undefined,
+        subject: `EP Approval Request: ${epData.title}`,
+        html: emailHtml,
+        text: emailText,
+        attachments: pdf
+          ? [{ filename: 'EP-approval.pdf', content: pdf, contentType: 'application/pdf' }]
+          : [],
+      });
       results.push({ email: toEmail, ...result });
     }
 
     res.json({
       success: true,
-      message: `Email sent to ${toEmails.length} recipient(s)`,
+      message: `Email with PDF sent to ${list.length} recipient(s)`,
       results
     });
   } catch (error) {
@@ -1123,16 +927,250 @@ exports.sendEPRequestEmail = async (req, res) => {
   }
 };
 
-// ==================== FORGOT PASSWORD PLACEHOLDERS ====================
+// ==================== FORGOT / RESET PASSWORD ====================
 
 exports.sendForgotPasswordOTP = async (req, res) => {
-  res.status(501).json({ success: false, message: "Not implemented yet" });
+  try {
+    req.body.type = 'reset';
+    return exports.sendEmailOTP(req, res);
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
 };
 
 exports.resendForgotPasswordOTP = async (req, res) => {
-  res.status(501).json({ success: false, message: "Not implemented yet" });
+  return exports.sendForgotPasswordOTP(req, res);
 };
 
 exports.verifyOTPAndResetPassword = async (req, res) => {
-  res.status(501).json({ success: false, message: "Not implemented yet" });
+  try {
+    const { email, otp, newPassword, confirmPassword } = req.body;
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Email, OTP and new password required' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Minimum 6 characters' });
+    }
+    const otpRecord = await OTP.findOne({ email: email.toLowerCase(), otp, type: 'reset' });
+    if (!otpRecord) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
+    if (new Date() > otpRecord.expiresAt) {
+      await OTP.deleteOne({ _id: otpRecord._id });
+      return res.status(400).json({ success: false, message: 'OTP has expired' });
+    }
+    await OTP.deleteOne({ _id: otpRecord._id });
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    user.password = newPassword;
+    await user.save();
+    res.json({ success: true, message: 'Password reset successful. You can log in.' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.sendForgotPasswordLink = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
+    }
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.json({ success: true, message: 'If an account exists, reset instructions have been sent.' });
+    }
+    const raw = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = crypto.createHash('sha256').update(raw).digest('hex');
+    user.resetPasswordExpire = new Date(Date.now() + 3600000);
+    await user.save({ validateBeforeSave: false });
+    const base = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:4200';
+    const link = `${base.replace(/\/$/, '')}/reset-password?token=${raw}`;
+    await sendMail({
+      to: user.email,
+      subject: 'Password reset instructions',
+      html: `<p>Hello ${user.name},</p><p><a href="${link}">Reset your password</a></p><p>${link}</p><p>Expires in 1 hour.</p>`,
+      text: link,
+    });
+    res.json({ success: true, message: 'If an account exists, reset instructions have been sent.' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.resetPasswordWithToken = async (req, res) => {
+  try {
+    const { token, newPassword, confirmPassword } = req.body;
+    if (!token || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Token and new password required' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Minimum 6 characters' });
+    }
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      resetPasswordToken: hash,
+      resetPasswordExpire: { $gt: new Date() },
+    }).select('+resetPasswordToken +resetPasswordExpire');
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired token' });
+    }
+    user.password = newPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save();
+    res.json({ success: true, message: 'Password updated. You can log in.' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.sendSmsOTP = async (req, res) => {
+  try {
+    const { mobile, type = 'login' } = req.body;
+    if (!mobile) {
+      return res.status(400).json({ success: false, message: 'Mobile number is required' });
+    }
+    if (type === 'login' || type === 'reset') {
+      const cleanMobile = mobile.replace(/\D/g, '');
+      const user = await User.findOne({
+        $or: [
+          { contactNo: { $regex: cleanMobile + '$', $options: 'i' } },
+          { phone: { $regex: cleanMobile + '$', $options: 'i' } },
+        ],
+      });
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'Mobile number not registered' });
+      }
+    }
+    const result = await sendSmsOtp(mobile);
+    if (!result.success) {
+      return res.status(500).json({ success: false, message: result.error || 'Failed to send SMS' });
+    }
+    await OTP.deleteMany({ mobile: mobile, type: type });
+    await OTP.create({
+      mobile: mobile,
+      otp: 'twilio_verify',
+      type: type,
+      referenceSid: result.sid,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+    res.json({
+      success: true,
+      message: `OTP sent to ${mobile}`,
+      method: 'mobile',
+      status: result.status,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.updateProfile = async (req, res) => {
+  try {
+    const { name, email, contactNo, department, organization, dateOfBirth, workspaces } = req.body;
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (name) user.name = name.trim();
+    if (email && email.toLowerCase() !== user.email) {
+      const exists = await User.findOne({ email: email.toLowerCase() });
+      if (exists && String(exists._id) !== String(user._id)) {
+        return res.status(400).json({ success: false, message: 'Email already in use' });
+      }
+      user.email = email.toLowerCase();
+    }
+    if (contactNo !== undefined) user.contactNo = contactNo;
+    if (department !== undefined) user.department = department;
+    if (organization !== undefined) user.organization = organization;
+    if (dateOfBirth !== undefined) user.dateOfBirth = dateOfBirth ? new Date(dateOfBirth) : null;
+    if (workspaces !== undefined) user.workspaces = Array.isArray(workspaces) ? workspaces : [];
+    await user.save();
+    res.json({
+      success: true,
+      message: 'Profile updated',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        department: user.department,
+        contactNo: user.contactNo,
+        organization: user.organization,
+        profileImage: user.profileImage || '',
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
+        rights: user.rights || {},
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Current and new password required' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Minimum 6 characters' });
+    }
+    const user = await User.findById(req.user._id);
+    const ok = await user.comparePassword(currentPassword);
+    if (!ok) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+    user.password = newPassword;
+    await user.save();
+    res.json({ success: true, message: 'Password updated successfully', toast: 'success' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.uploadProfilePhoto = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image uploaded' });
+    }
+    const rel = `/uploads/profiles/${req.file.filename}`;
+    const user = await User.findById(req.user._id);
+    user.profileImage = rel;
+    await user.save();
+    res.json({
+      success: true,
+      message: 'Photo uploaded',
+      profileImage: rel,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        profileImage: user.profileImage,
+        role: user.role,
+        department: user.department,
+        contactNo: user.contactNo,
+        organization: user.organization,
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
+        rights: user.rights || {},
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
 };

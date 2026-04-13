@@ -1,6 +1,7 @@
 require("dotenv").config();  // ✅ MOVED TO THE TOP - Must be first!
 
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const helmet = require("helmet");   // Added for security (optional but recommended)
 
@@ -36,6 +37,8 @@ app.use(cors({
 // Body parsers - MUST be before routes
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 // Request logger (for development)
 if (process.env.NODE_ENV !== "production") {
@@ -75,6 +78,8 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/request", requestRoutes);
 app.use("/api/vendor", vendorRoutes);
 app.use("/api/rfq", require('./routes/rfq.routes'));
+app.use("/api/pr-npp", require('./routes/prNpp.routes'));
+app.use("/api/otp", require('./routes/otp.routes'));
 app.use("/api/part", partRoutes);
 app.use("/api/users", userRoutes);
 

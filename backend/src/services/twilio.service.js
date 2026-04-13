@@ -1,126 +1,110 @@
 const twilio = require('twilio');
-const sgMail = require('@sendgrid/mail');
+const { sendMail } = require('./mail.service');
 
-// Initialize Twilio Client
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+let twilioClient = null;
 
-// Initialize SendGrid for Email
-if (process.env.SENDGRID_API_KEY && process.env.SENDGRID_API_KEY !== 'SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-  console.log('✅ SendGrid initialized');
+function getTwilioClient() {
+  if (twilioClient) return twilioClient;
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !token) {
+    return null;
+  }
+  twilioClient = twilio(sid, token);
+  return twilioClient;
 }
 
 const VERIFY_SERVICE_SID = process.env.TWILIO_VERIFY_SERVICE_SID;
 
-/**
- * Send OTP via SMS using Twilio Verify API
- * @param {string} phoneNumber - Recipient's phone number (with country code)
- * @returns {Promise<object>}
- */
 const sendSmsOtp = async (phoneNumber) => {
   try {
-    // Format phone number - ensure it has country code
+    const client = getTwilioClient();
+    if (!client || !VERIFY_SERVICE_SID) {
+      console.warn('Twilio SMS: missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_VERIFY_SERVICE_SID');
+      return { success: false, error: 'Twilio Verify is not configured' };
+    }
+
     let formattedNumber = phoneNumber;
     if (!phoneNumber.startsWith('+')) {
-      // Add +91 for India if no country code
       formattedNumber = `+91${phoneNumber.replace(/\D/g, '')}`;
     }
 
-    console.log(`📱 Sending SMS OTP to: ${formattedNumber}`);
+    console.log(`Sending SMS OTP to: ${formattedNumber}`);
 
-    const verification = await twilioClient.verify.v2
+    const verification = await client.verify.v2
       .services(VERIFY_SERVICE_SID)
       .verifications.create({
         to: formattedNumber,
-        channel: 'sms'
+        channel: 'sms',
       });
 
-    console.log(`✅ SMS OTP sent. SID: ${verification.sid}, Status: ${verification.status}`);
-    return { 
-      success: true, 
-      sid: verification.sid, 
+    return {
+      success: true,
+      sid: verification.sid,
       status: verification.status,
-      to: formattedNumber
+      to: formattedNumber,
     };
   } catch (error) {
-    console.error('❌ SMS OTP error:', error.message);
+    console.error('SMS OTP error:', error.message);
     return { success: false, error: error.message };
   }
 };
 
-/**
- * Verify OTP via SMS using Twilio Verify API
- * @param {string} phoneNumber - User's phone number
- * @param {string} code - OTP code entered by user
- * @returns {Promise<object>}
- */
 const verifySmsOtp = async (phoneNumber, code) => {
   try {
-    // Format phone number
+    const client = getTwilioClient();
+    if (!client || !VERIFY_SERVICE_SID) {
+      return { success: false, isValid: false, error: 'Twilio Verify is not configured' };
+    }
+
     let formattedNumber = phoneNumber;
     if (!phoneNumber.startsWith('+')) {
       formattedNumber = `+91${phoneNumber.replace(/\D/g, '')}`;
     }
 
-    console.log(`🔐 Verifying SMS OTP for: ${formattedNumber} with code: ${code}`);
-
-    const verificationCheck = await twilioClient.verify.v2
+    const verificationCheck = await client.verify.v2
       .services(VERIFY_SERVICE_SID)
       .verificationChecks.create({
         to: formattedNumber,
-        code: code
+        code: code,
       });
 
     const isValid = verificationCheck.status === 'approved';
-    console.log(`✅ SMS OTP verification result: ${isValid ? 'APPROVED' : 'FAILED'}`);
-    
-    return { 
-      success: true, 
-      isValid, 
+    return {
+      success: true,
+      isValid,
       status: verificationCheck.status,
-      sid: verificationCheck.sid
+      sid: verificationCheck.sid,
     };
   } catch (error) {
-    console.error('❌ SMS verification error:', error.message);
+    console.error('SMS verification error:', error.message);
     return { success: false, isValid: false, error: error.message };
   }
 };
 
-/**
- * Send OTP via Email using SendGrid
- * @param {string} email - Recipient's email address
- * @param {string} name - User's name
- * @param {string} otp - OTP code
- * @param {string} type - Type of OTP (login, registration, reset)
- * @returns {Promise<object>}
- */
 const sendEmailOtp = async (email, name, otp, type) => {
-  try {
-    let subject = '';
-    let title = '';
-    
-    switch(type) {
-      case 'login':
-        subject = 'Your Login OTP - LCGC RFQ';
-        title = 'Login Verification';
-        break;
-      case 'registration':
-        subject = 'Verify Your Email - LCGC RFQ';
-        title = 'Email Verification';
-        break;
-      case 'reset':
-        subject = 'Password Reset OTP - LCGC RFQ';
-        title = 'Password Reset';
-        break;
-      default:
-        subject = 'Your OTP - LCGC RFQ';
-        title = 'OTP Verification';
-    }
+  let subject = '';
+  let title = '';
 
-    const html = `
+  switch (type) {
+    case 'login':
+      subject = 'Your Login OTP - LCGC RFQ';
+      title = 'Login Verification';
+      break;
+    case 'registration':
+      subject = 'Verify Your Email - LCGC RFQ';
+      title = 'Email Verification';
+      break;
+    case 'reset':
+      subject = 'Password Reset OTP - LCGC RFQ';
+      title = 'Password Reset';
+      break;
+    default:
+      subject = 'Your OTP - LCGC RFQ';
+      title = 'OTP Verification';
+  }
+
+  const html = `
       <!DOCTYPE html>
       <html>
       <head>
@@ -129,57 +113,39 @@ const sendEmailOtp = async (email, name, otp, type) => {
           .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
           .header { background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center; }
           .header h1 { color: white; margin: 0; font-size: 28px; }
-          .header p { color: rgba(255,255,255,0.9); margin: 8px 0 0; }
           .content { padding: 30px; }
-          .otp-code { font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: #f8fafc; padding: 15px; border-radius: 10px; font-family: monospace; text-align: center; display: inline-block; width: 100%; box-sizing: border-box; }
-          .footer { text-align: center; padding: 20px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; margin-top: 20px; }
+          .otp-code { font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: #f8fafc; padding: 15px; border-radius: 10px; font-family: monospace; text-align: center; }
         </style>
       </head>
       <body>
         <div class="container">
-          <div class="header">
-            <h1>LCGC RFQ</h1>
-            <p>Resolute Group</p>
-          </div>
+          <div class="header"><h1>LCGC RFQ</h1></div>
           <div class="content">
             <h2 style="color: #0f2a5e;">${title}</h2>
             <p>Hello <strong>${name}</strong>,</p>
             <p>Your OTP is:</p>
             <div class="otp-code">${otp}</div>
             <p>This OTP is valid for <strong>10 minutes</strong>.</p>
-            <p>If you didn't request this, please ignore this email.</p>
-          </div>
-          <div class="footer">
-            <p>This is an automated message, please do not reply.</p>
-            <p>&copy; ${new Date().getFullYear()} LCGC RFQ. All rights reserved.</p>
           </div>
         </div>
       </body>
       </html>
     `;
 
-    const msg = {
-      to: email,
-      from: {
-        email: process.env.FROM_EMAIL || 'noreply@lcgresolve.com',
-        name: process.env.FROM_NAME || 'LCGC RFQ'
-      },
-      subject: subject,
-      html: html,
-      text: `Your OTP for ${title.toLowerCase()} is: ${otp}. Valid for 10 minutes.`
-    };
-
-    await sgMail.send(msg);
-    console.log(`✅ Email OTP sent to ${email}`);
-    return { success: true };
-  } catch (error) {
-    console.error('❌ Email OTP error:', error.response?.body || error.message);
-    return { success: false, error: error.message };
+  const r = await sendMail({
+    to: email,
+    subject,
+    html,
+    text: `Your OTP for ${title.toLowerCase()} is: ${otp}. Valid for 10 minutes.`,
+  });
+  if (!r.success) {
+    return { success: false, error: r.error || 'Email send failed' };
   }
+  return { success: true };
 };
 
 module.exports = {
   sendSmsOtp,
   verifySmsOtp,
-  sendEmailOtp
+  sendEmailOtp,
 };

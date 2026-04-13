@@ -1,5 +1,18 @@
 const mongoose = require('mongoose');
-const Request = require('../models/request');   // Your model
+const Request = require('../models/request');
+const { sendEpMailWithPdf } = require('../services/epNotify.service');
+
+const SENIOR = new Set(['Admin', 'Manager', 'VP', 'GM', 'MD', 'Director', 'AGM', 'Approver']);
+
+function canActOnEp(user, doc) {
+  if (!user || !doc) return false;
+  if (user.rights?.epApproval) return true;
+  if (SENIOR.has(user.role)) return true;
+  const u = (user.email || '').toLowerCase();
+  return (doc.stakeholders || []).some(
+    (s) => (s.email || '').toLowerCase() === u && (s.status === 'Pending' || s.status === 'In-Process')
+  );
+}
 
 // Simple middleware to simulate auth for testing
 const mockAuth = (req, res, next) => {
@@ -128,9 +141,19 @@ exports.createRequest = async (req, res) => {
    
     console.log('✅ Request created:', savedRequest._id);
    
+    try {
+      await sendEpMailWithPdf(
+        savedRequest,
+        `EP Approval Request: ${savedRequest.title}`,
+        `EP: ${savedRequest.title}`
+      );
+    } catch (e) {
+      console.error('Request create notify:', e.message);
+    }
+
     res.status(201).json({
       success: true,
-      message: 'EP Request created successfully',
+      message: 'EP Request created successfully; email with PDF sent to requester/CC',
       data: savedRequest
     });
    
@@ -189,50 +212,52 @@ exports.deleteRequest = async (req, res) => {
   }
 };
 
-// Approve request
+// Approve request (one senior approver finalizes; all stakeholders marked approved)
 exports.approveRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { comments = '' } = req.body || {};   // Safe destructuring
-   
+    const { comments = '' } = req.body || {};
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid ID format' });
     }
-   
+
     const request = await Request.findById(id);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-   
-    const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
-    if (pendingApprovers.length === 0) {
-      return res.status(400).json({ success: false, message: 'No pending approvals' });
+    if (['Approved', 'Rejected'].includes(request.status)) {
+      return res.status(400).json({ success: false, message: 'Request already finalized' });
     }
-   
-    pendingApprovers.sort((a, b) => a.approvalOrder - b.approvalOrder);
-    const currentApprover = pendingApprovers[0];
-   
-    currentApprover.status = 'Approved';
-    currentApprover.remarks = comments || currentApprover.remarks;
-    currentApprover.dateTime = new Date();
-   
-    const nextApprover = request.stakeholders.find(s => s.status === 'Pending');
-   
-    if (nextApprover) {
-      request.status = 'In-Process';
-    } else {
-      request.status = 'Approved';
-      request.approvedAt = new Date();
+    if (!canActOnEp(req.user, request)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to approve' });
     }
-   
+
+    const actor = req.user.name || req.user.email || 'Approver';
+    const nowIso = new Date().toISOString();
+    request.stakeholders.forEach((s) => {
+      if (s.status === 'Pending' || s.status === 'In-Process') {
+        s.status = 'Approved';
+        s.remarks = comments ? `${actor}: ${comments}` : `${actor}: Approved`;
+        s.dateTime = nowIso;
+      }
+    });
+    request.status = 'Approved';
+    request.approvedAt = new Date();
+    request.approvedBy = actor;
     await request.save();
-   
-    res.json({ 
-      success: true, 
-      message: nextApprover 
-        ? `Approved by ${currentApprover.name}. Next: ${nextApprover.name}` 
-        : 'Request fully approved!', 
-      data: request 
+
+    try {
+      await sendEpMailWithPdf(request, `EP Approved: ${request.title}`, `Approved by ${actor}`);
+    } catch (e) {
+      console.error(e.message);
+    }
+
+    res.json({
+      success: true,
+      toast: 'success',
+      message: 'Request approved. CC notified with PDF.',
+      data: request,
     });
   } catch (error) {
     console.error('Approve error:', error);
@@ -244,35 +269,45 @@ exports.approveRequest = async (req, res) => {
 exports.rejectRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { comments = '' } = req.body || {};   // Safe destructuring
-   
+    const { comments = '' } = req.body || {};
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid ID format' });
     }
-   
+
     const request = await Request.findById(id);
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
-   
-    const pendingApprovers = request.stakeholders.filter(s => s.status === 'Pending');
-    if (pendingApprovers.length === 0) {
-      return res.status(400).json({ success: false, message: 'No pending approvals' });
+    if (['Approved', 'Rejected'].includes(request.status)) {
+      return res.status(400).json({ success: false, message: 'Request already finalized' });
     }
-   
-    const currentApprover = pendingApprovers.sort((a, b) => a.approvalOrder - b.approvalOrder)[0];
-   
-    currentApprover.status = 'Rejected';
-    currentApprover.remarks = comments;
-    currentApprover.dateTime = new Date();
-   
+    if (!canActOnEp(req.user, request)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to reject' });
+    }
+
+    const actor = req.user.name || req.user.email || 'Approver';
+    const nowIso = new Date().toISOString();
+    request.stakeholders.forEach((s) => {
+      if (s.status === 'Pending' || s.status === 'In-Process') {
+        s.status = 'Rejected';
+        s.remarks = comments ? `${actor}: ${comments}` : `${actor}: Rejected`;
+        s.dateTime = nowIso;
+      }
+    });
     request.status = 'Rejected';
-    request.rejectionReason = comments || 'Rejected by approver';
+    request.rejectionReason = comments || 'Rejected';
+    request.rejectedBy = actor;
     request.rejectedAt = new Date();
-   
     await request.save();
-   
-    res.json({ success: true, message: 'Request rejected', data: request });
+
+    try {
+      await sendEpMailWithPdf(request, `EP Rejected: ${request.title}`, `Rejected by ${actor}`);
+    } catch (e) {
+      console.error(e.message);
+    }
+
+    res.json({ success: true, toast: 'error', message: 'Request rejected', data: request });
   } catch (error) {
     console.error('Reject error:', error);
     res.status(500).json({ success: false, message: error.message });

@@ -23,14 +23,13 @@ const userSchema = new mongoose.Schema({
   },
   role: { 
     type: String, 
-    enum: ['Admin', 'Manager', 'VP', 'User', 'Approver'],
+    enum: ['Admin', 'Manager', 'VP', 'GM', 'MD', 'Director', 'AGM', 'User', 'Approver'],
     default: 'User'
   },
   contactNo: { 
     type: String, 
     trim: true, 
-    default: '',
-    match: [/^[0-9]{10}$/, 'Please enter a valid 10-digit mobile number']
+    default: ''
   },
   phone: { 
     type: String, 
@@ -62,6 +61,16 @@ const userSchema = new mongoose.Schema({
       message: 'Date of birth cannot be in the future'
     }
   },
+  profileImage: {
+    type: String,
+    default: ''
+  },
+  workspaces: {
+    type: [String],
+    default: []
+  },
+  resetPasswordToken: { type: String, select: false },
+  resetPasswordExpire: { type: Date, select: false },
   lastLogin: { 
     type: Date 
   },

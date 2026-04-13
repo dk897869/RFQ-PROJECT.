@@ -39,7 +39,7 @@ exports.getUserById = async (req, res) => {
     }
     
     // Users can only view their own profile unless admin
-    if (req.user.role !== 'Admin' && req.user.id !== id) {
+    if (req.user.role !== 'Admin' && String(req.user._id) !== String(id)) {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
     
@@ -150,11 +150,11 @@ exports.updateUser = async (req, res) => {
     }
     
     // Check permissions
-    if (req.user.role !== 'Admin' && req.user.id !== id) {
+    if (req.user.role !== 'Admin' && String(req.user._id) !== String(id)) {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
     
-    const { name, email, role, department, contactNo, organization } = req.body;
+    const { name, email, role, department, contactNo, organization, dateOfBirth, workspaces, profileImage } = req.body;
     
     // Update fields
     if (name) user.name = name.trim();
@@ -163,6 +163,9 @@ exports.updateUser = async (req, res) => {
     if (department !== undefined) user.department = department;
     if (contactNo !== undefined) user.contactNo = contactNo;
     if (organization !== undefined) user.organization = organization;
+    if (dateOfBirth !== undefined) user.dateOfBirth = dateOfBirth ? new Date(dateOfBirth) : null;
+    if (workspaces !== undefined) user.workspaces = Array.isArray(workspaces) ? workspaces : [];
+    if (profileImage !== undefined) user.profileImage = profileImage;
     
     // Update password if provided
     if (req.body.password) {

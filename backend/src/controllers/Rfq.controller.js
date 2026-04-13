@@ -1,4 +1,6 @@
-const RFQ = require('../models/Rfq');   // ← Fixed: Capital 'R' to match model filename
+const RFQ = require('../models/Rfq');
+const { sendMail } = require('../services/mail.service');
+const { buildRfqPdfBuffer } = require('../utils/rfqPdf');
 
 // Get all RFQs
 const getAllRFQs = async (req, res) => {
@@ -32,11 +34,36 @@ const createRFQ = async (req, res) => {
 
     const newRFQ = new RFQ(req.body);
     const savedRFQ = await newRFQ.save();
-    
-    res.status(201).json({ 
-      success: true, 
-      message: "RFQ created successfully",
-      data: savedRFQ 
+
+    try {
+      let pdf;
+      try {
+        pdf = await buildRfqPdfBuffer(savedRFQ);
+      } catch (e) {
+        console.error('RFQ PDF:', e.message);
+      }
+      const to = savedRFQ.emailId;
+      if (to) {
+        const html = `<p><strong>Requisition RFQ (NPP)</strong></p><p>${savedRFQ.titleOfActivity || ''}</p><p>Priority: ${savedRFQ.priority || ''}</p>`;
+        await sendMail({
+          to,
+          cc: savedRFQ.ccTo?.length ? savedRFQ.ccTo : undefined,
+          subject: `RFQ (NPP): ${savedRFQ.titleOfActivity}`,
+          html,
+          text: savedRFQ.titleOfActivity,
+          attachments: pdf
+            ? [{ filename: 'RFQ-NPP.pdf', content: pdf, contentType: 'application/pdf' }]
+            : [],
+        });
+      }
+    } catch (mailErr) {
+      console.error('RFQ mail:', mailErr.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'RFQ created successfully; email with PDF sent when emailId is set',
+      data: savedRFQ,
     });
   } catch (err) {
     console.error("Error in createRFQ:", err);

@@ -1,18 +1,19 @@
 const express = require('express');
 const router = express.Router();
+const { verifyToken } = require('../middlewares/auth');
 
 const {
   getAllRFQs,
   createRFQ,
   getRFQById,
   getVendors,
-  getDepartments
+  getDepartments,
 } = require('../controllers/Rfq.controller');
 
-// RFQ Routes
-router.get('/', getAllRFQs);
-router.post('/', createRFQ);
-router.get('/:id', getRFQById);
-router.get('/vendors', getVendors);
+router.get('/vendors', verifyToken, getVendors);
+router.get('/departments', verifyToken, getDepartments);
+router.get('/', verifyToken, getAllRFQs);
+router.post('/', verifyToken, createRFQ);
+router.get('/:id', verifyToken, getRFQById);
 
 module.exports = router;
