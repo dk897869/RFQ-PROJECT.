@@ -7,7 +7,7 @@ let resendClient = null;
 
 function getTransporter() {
   if (transporter) return transporter;
-  const host = process.env.SMTP_HOST || process.env.EMAIL_HOST;
+  const host = String(process.env.SMTP_HOST || process.env.EMAIL_HOST || '').trim();
   if (!host) return null;
   const port = Number(process.env.SMTP_PORT || process.env.EMAIL_PORT || 587);
   const secure =
@@ -75,15 +75,17 @@ async function sendMail(opts) {
       return { success: true, via: 'smtp' };
     } catch (e) {
       console.error('SMTP send error:', e.message);
-      return { success: false, error: e.message };
+      // Fall through to Resend / SendGrid instead of failing the request
     }
   }
 
   if (process.env.RESEND_API_KEY) {
     try {
       if (!resendClient) resendClient = new Resend(process.env.RESEND_API_KEY);
+      const resendFrom =
+        from && from !== 'noreply@localhost' ? from : 'onboarding@resend.dev';
       const payload = {
-        from,
+        from: resendFrom,
         to: toList,
         subject,
         html: html || `<p>${text || subject}</p>`,
@@ -135,12 +137,15 @@ async function sendMail(opts) {
     }
   }
 
-  console.log('[MAIL fallback — configure SMTP_HOST or RESEND_API_KEY]', {
+  console.warn('[MAIL] No provider configured (SMTP_HOST, RESEND_API_KEY, or SENDGRID_API_KEY)', {
     to: toList,
     subject,
-    attachmentCount: normAttach.length,
   });
-  return { success: true, via: 'console' };
+  return {
+    success: false,
+    via: 'none',
+    error: 'No email provider configured. Set SMTP_HOST (+ SMTP_USER/SMTP_PASS) or RESEND_API_KEY in .env',
+  };
 }
 
 module.exports = { sendMail, getFromAddress };

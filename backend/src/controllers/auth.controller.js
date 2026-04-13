@@ -176,7 +176,13 @@ exports.sendRegistrationOTP = async (req, res) => {
     }
 
     const name = email.split('@')[0];
-    await sendEmailOTPCode(email, name, otp, 'registration', ccArray);
+    const mailResult = await sendEmailOTPCode(email, name, otp, 'registration', ccArray);
+    if (!mailResult || mailResult.success === false) {
+      return res.status(502).json({
+        success: false,
+        message: mailResult?.error || 'Email could not be sent. Configure SMTP or RESEND_API_KEY; with Resend test domain you can only mail your signup address.',
+      });
+    }
 
     res.json({
       success: true,
@@ -258,7 +264,16 @@ exports.sendEmailOTP = async (req, res) => {
     }
 
     const name = user ? user.name : email.split('@')[0];
-    await sendEmailOTPCode(email, name, otp, type, ccArray);
+    const mailResult = await sendEmailOTPCode(email, name, otp, type, ccArray);
+    if (!mailResult || mailResult.success === false) {
+      return res.status(502).json({
+        success: false,
+        message:
+          mailResult?.error ||
+          'Email could not be sent. Use a verified Resend domain as FROM_EMAIL, or SMTP. Note: onboarding@resend.dev only sends to your Resend signup email.',
+        devOTP: process.env.NODE_ENV === 'development' ? otp : undefined,
+      });
+    }
 
     res.json({
       success: true,
@@ -334,8 +349,7 @@ exports.verifyOTP = async (req, res) => {
     }
 
     const token = generateToken(user);
-    user.lastLogin = new Date();
-    await user.save();
+    await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
 
     res.json({
       success: true,
@@ -437,14 +451,23 @@ exports.login = async (req, res) => {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
-    const match = await bcrypt.compare(password, user.password);
+    if (!user.password || typeof user.password !== "string") {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+
+    let match = false;
+    try {
+      match = await bcrypt.compare(password, user.password);
+    } catch (err) {
+      console.error("Login bcrypt error:", err.message);
+      match = false;
+    }
     if (!match) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
     const token = generateToken(user);
-    user.lastLogin = new Date();
-    await user.save();
+    await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
 
     res.json({
       success: true,
@@ -475,7 +498,7 @@ exports.login = async (req, res) => {
 
 exports.getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("-password");
+    const user = await User.findById(req.user._id || req.user.id).select("-password");
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
@@ -991,12 +1014,18 @@ exports.sendForgotPasswordLink = async (req, res) => {
     await user.save({ validateBeforeSave: false });
     const base = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:4200';
     const link = `${base.replace(/\/$/, '')}/reset-password?token=${raw}`;
-    await sendMail({
+    const mailResult = await sendMail({
       to: user.email,
       subject: 'Password reset instructions',
       html: `<p>Hello ${user.name},</p><p><a href="${link}">Reset your password</a></p><p>${link}</p><p>Expires in 1 hour.</p>`,
       text: link,
     });
+    if (!mailResult.success) {
+      return res.status(502).json({
+        success: false,
+        message: mailResult.error || 'Email not configured or send failed. Set RESEND_API_KEY or SMTP in .env',
+      });
+    }
     res.json({ success: true, message: 'If an account exists, reset instructions have been sent.' });
   } catch (e) {
     console.error(e);
