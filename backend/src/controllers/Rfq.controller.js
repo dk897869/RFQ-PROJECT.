@@ -1,6 +1,6 @@
 const RFQ = require('../models/Rfq');
 const { sendMail } = require('../services/mail.service');
-const { buildRfqPdfBuffer } = require('../utils/rfqPdf');
+const { generateBeautifulPDF } = require('../services/mail.service');
 
 // Get all RFQs
 const getAllRFQs = async (req, res) => {
@@ -21,12 +21,11 @@ const getAllRFQs = async (req, res) => {
   }
 };
 
-// Create new RFQ - FIXED VERSION
+// Create new RFQ
 const createRFQ = async (req, res) => {
   try {
     console.log("📥 Received RFQ data:", JSON.stringify(req.body, null, 2));
 
-    // Extract data from request body (handle both formats)
     let { 
       titleOfActivity, 
       items, 
@@ -42,9 +41,8 @@ const createRFQ = async (req, res) => {
       ccTo
     } = req.body;
 
-    // FIX: If items is empty or invalid, check for alternative field names
+    // Handle items if sent as string
     if (!items || !Array.isArray(items) || items.length === 0) {
-      // Try to extract items from form data (might be sent as stringified JSON)
       if (req.body.itemsJson) {
         try {
           items = JSON.parse(req.body.itemsJson);
@@ -53,7 +51,6 @@ const createRFQ = async (req, res) => {
         }
       }
       
-      // Check for individual item fields (if sent as separate fields)
       if (!items && req.body.itemDescription) {
         items = [{
           itemDescription: req.body.itemDescription,
@@ -67,7 +64,7 @@ const createRFQ = async (req, res) => {
       }
     }
 
-    // Enhanced validation with detailed error messages
+    // Validation
     if (!titleOfActivity) {
       return res.status(400).json({
         success: false,
@@ -85,7 +82,7 @@ const createRFQ = async (req, res) => {
       });
     }
 
-    // Validate each item has required fields
+    // Validate each item
     for (let i = 0; i < items.length; i++) {
       if (!items[i].itemDescription) {
         return res.status(400).json({
@@ -103,7 +100,6 @@ const createRFQ = async (req, res) => {
       }
     }
 
-    // Set default values if not provided
     const rfqData = {
       requesterName: requesterName || 'Chandra Shekhar',
       department: department || 'Purchase',
@@ -125,52 +121,20 @@ const createRFQ = async (req, res) => {
 
     console.log("✅ RFQ saved successfully:", savedRFQ._id);
 
-    // Send email notification (don't block response if fails)
+    // Send email notification
     try {
-      let pdf = null;
-      try {
-        if (buildRfqPdfBuffer) {
-          pdf = await buildRfqPdfBuffer(savedRFQ);
-        }
-      } catch (e) {
-        console.error('PDF generation error:', e.message);
-      }
-      
-      const to = savedRFQ.emailId;
-      if (to && sendMail) {
-        const html = `
-          <h2>Requisition RFQ (NPP)</h2>
-          <p><strong>Title:</strong> ${savedRFQ.titleOfActivity || ''}</p>
-          <p><strong>Priority:</strong> ${savedRFQ.priority || ''}</p>
-          <p><strong>Department:</strong> ${savedRFQ.department || ''}</p>
-          <p><strong>Request Date:</strong> ${savedRFQ.requestDate || new Date()}</p>
-          <h3>Items:</h3>
-          <table border="1" cellpadding="5">
-            <tr><th>Description</th><th>UOM</th><th>Quantity</th><th>Make</th></tr>
-            ${savedRFQ.items.map(item => `
-              <tr>
-                <td>${item.itemDescription}</td>
-                <td>${item.uom}</td>
-                <td>${item.quantity}</td>
-                <td>${item.make || '-'}</td>
-              </tr>
-            `).join('')}
-          </table>
-        `;
-        
-        await sendMail({
-          to,
-          cc: savedRFQ.ccTo?.length ? savedRFQ.ccTo : undefined,
-          subject: `RFQ (NPP): ${savedRFQ.titleOfActivity}`,
-          html,
-          text: savedRFQ.titleOfActivity,
-          attachments: pdf ? [{ filename: 'RFQ-NPP.pdf', content: pdf, contentType: 'application/pdf' }] : [],
-        });
-        console.log("📧 Email sent successfully");
-      }
+      await sendMail({
+        to: savedRFQ.emailId,
+        cc: savedRFQ.ccTo?.length ? savedRFQ.ccTo : undefined,
+        subject: `📋 RFQ Created: ${savedRFQ.titleOfActivity}`,
+        rfqData: savedRFQ,
+        action: 'created',
+        actor: null,
+        nextApprover: null
+      });
+      console.log("📧 Email sent successfully");
     } catch (mailErr) {
       console.error('Email sending error:', mailErr.message);
-      // Don't fail the request if email fails
     }
 
     res.status(201).json({
@@ -269,6 +233,112 @@ const deleteRFQ = async (req, res) => {
   }
 };
 
+// ✅ ADD THIS - Approve RFQ
+const approveRFQ = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { comments } = req.body;
+    
+    const rfq = await RFQ.findById(id);
+    
+    if (!rfq) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'RFQ not found' 
+      });
+    }
+    
+    // Update status
+    rfq.status = 'Approved';
+    if (comments) {
+      rfq.approvalComments = comments;
+    }
+    rfq.approvedAt = new Date();
+    rfq.approvedBy = req.user?.id || 'System';
+    
+    await rfq.save();
+    
+    // Send approval email
+    try {
+      await sendMail({
+        to: rfq.emailId,
+        cc: rfq.ccTo?.length ? rfq.ccTo : undefined,
+        subject: `✅ RFQ Approved: ${rfq.titleOfActivity}`,
+        rfqData: rfq,
+        action: 'approved',
+        actor: { name: req.user?.name || 'Approver', remarks: comments }
+      });
+    } catch (mailErr) {
+      console.error('Approval email error:', mailErr.message);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'RFQ approved successfully',
+      data: rfq
+    });
+  } catch (err) {
+    console.error("Error in approveRFQ:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || 'Failed to approve RFQ'
+    });
+  }
+};
+
+// ✅ ADD THIS - Reject RFQ
+const rejectRFQ = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { comments } = req.body;
+    
+    const rfq = await RFQ.findById(id);
+    
+    if (!rfq) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'RFQ not found' 
+      });
+    }
+    
+    // Update status
+    rfq.status = 'Rejected';
+    if (comments) {
+      rfq.rejectionComments = comments;
+    }
+    rfq.rejectedAt = new Date();
+    rfq.rejectedBy = req.user?.id || 'System';
+    
+    await rfq.save();
+    
+    // Send rejection email
+    try {
+      await sendMail({
+        to: rfq.emailId,
+        cc: rfq.ccTo?.length ? rfq.ccTo : undefined,
+        subject: `❌ RFQ Rejected: ${rfq.titleOfActivity}`,
+        rfqData: rfq,
+        action: 'rejected',
+        actor: { name: req.user?.name || 'Approver', remarks: comments }
+      });
+    } catch (mailErr) {
+      console.error('Rejection email error:', mailErr.message);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'RFQ rejected successfully',
+      data: rfq
+    });
+  } catch (err) {
+    console.error("Error in rejectRFQ:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || 'Failed to reject RFQ'
+    });
+  }
+};
+
 // Get Vendors
 const getVendors = (req, res) => {
   res.status(200).json({
@@ -304,6 +374,8 @@ module.exports = {
   getRFQById,
   updateRFQ,
   deleteRFQ,
+  approveRFQ,     // ✅ Export approve
+  rejectRFQ,      // ✅ Export reject
   getVendors,
   getDepartments
 };
