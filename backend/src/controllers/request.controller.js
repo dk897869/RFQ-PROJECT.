@@ -1,401 +1,559 @@
-const mongoose = require('mongoose');
 const Request = require('../models/request');
-const { sendEpMailWithPdf } = require('../services/epNotify.service');
+const { sendMail } = require('../services/mail.service');
+const { generatePDFFromRequest } = require('../services/pdf.service');
+const epNotify = require('../services/epNotify.service');
 
-const SENIOR = new Set(['Admin', 'Manager', 'VP', 'GM', 'MD', 'Director', 'AGM', 'Approver']);
-
-function canActOnEp(user, doc) {
-  if (!user || !doc) return false;
-  if (user.rights?.epApproval) return true;
-  if (SENIOR.has(user.role)) return true;
-  const u = (user.email || '').toLowerCase();
-  return (doc.stakeholders || []).some(
-    (s) => (s.email || '').toLowerCase() === u && (s.status === 'Pending' || s.status === 'In-Process')
-  );
-}
-
-// Simple middleware to simulate auth for testing
-const mockAuth = (req, res, next) => {
-  req.user = {
-    id: 'test_user_id',
-    email: 'test@example.com',
-    name: 'Test User',
-    role: 'Admin'
-  };
-  next();
-};
-
-// GET all requests
-exports.getRequests = async (req, res) => {
+// ====================== CREATE REQUEST ======================
+const createRequest = async (req, res) => {
   try {
-    const requests = await Request.find().sort({ createdAt: -1 });
-    res.json({ success: true, data: requests, count: requests.length });
-  } catch (error) {
-    console.error('Get requests error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// GET single request by ID
-exports.getRequestById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid ID format' });
-    }
-   
-    const request = await Request.findById(id);
-    if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
-    }
-   
-    res.json({ success: true, data: request });
-  } catch (error) {
-    console.error('Get request error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// CREATE new request
-exports.createRequest = async (req, res) => {
-  try {
-    console.log('📤 Creating request with body:', JSON.stringify(req.body, null, 2));
-   
+    console.log("📥 Received EP Request data:", JSON.stringify(req.body, null, 2));
+    
     const {
       requester,
       department,
       email,
+      requestDate,
       contactNo,
       organization,
       title,
-      amount,
       vendor,
+      amount,
       priority,
       description,
       objective,
       stakeholders,
-      ccList
-    } = req.body || {};
-   
-    // Validate required fields
-    if (!requester) return res.status(400).json({ success: false, message: 'requester is required' });
-    if (!department) return res.status(400).json({ success: false, message: 'department is required' });
-    if (!title) return res.status(400).json({ success: false, message: 'title is required' });
-    if (!amount || amount <= 0) return res.status(400).json({ success: false, message: 'valid amount is required' });
-    if (!vendor) return res.status(400).json({ success: false, message: 'vendor is required' });
-    if (!email) return res.status(400).json({ success: false, message: 'email is required' });
-   
-    // Process stakeholders
-    let processedStakeholders = [];
-    if (stakeholders && Array.isArray(stakeholders) && stakeholders.length > 0) {
-      processedStakeholders = stakeholders.map((s, idx) => ({
-        name: s.name,
-        email: s.email,
-        designation: s.designation,
-        line: s.line || 'Sequential',
-        approvalOrder: s.approvalOrder || idx + 1,
-        status: idx === 0 ? 'Pending' : 'Pending',
-        remarks: s.remarks || '',
-        dateTime: null
-      }));
-    } else {
-      // Default stakeholders
-      processedStakeholders = [
-        { name: "Vijay Parashar", email: "vijay@example.com", designation: "Manager", line: "Parallel", approvalOrder: 1, status: "Pending", remarks: "", dateTime: null },
-        { name: "Ravib", email: "ravib@example.com", designation: "A-GM", line: "Parallel", approvalOrder: 2, status: "Pending", remarks: "", dateTime: null }
-      ];
+      attachments,
+      ccList,
+      status
+    } = req.body;
+
+    // Validation
+    if (!requester) {
+      return res.status(400).json({
+        success: false,
+        message: "requester is required"
+      });
     }
-   
-    // Process CC list
-    let processedCCList = [];
-    if (ccList) {
-      if (typeof ccList === 'string') {
-        processedCCList = ccList.split(',').map(e => e.trim()).filter(e => e);
-      } else if (Array.isArray(ccList)) {
-        processedCCList = ccList.filter(e => e && e.trim());
-      }
+
+    if (!title) {
+      return res.status(400).json({
+        success: false,
+        message: "title is required"
+      });
     }
-   
-    const requestData = {
-      requester: requester.trim(),
-      department: department.trim(),
-      email: email.trim().toLowerCase(),
+
+    if (!vendor) {
+      return res.status(400).json({
+        success: false,
+        message: "vendor is required"
+      });
+    }
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid amount is required"
+      });
+    }
+
+    // Prepare stakeholders with approvalOrder
+    const processedStakeholders = (stakeholders || []).map((s, idx) => ({
+      ...s,
+      approvalOrder: s.approvalOrder || idx + 1,
+      status: 'Pending',
+      dateTime: null
+    }));
+
+    // Create new request
+    const newRequest = new Request({
+      requester,
+      department,
+      email,
+      requestDate: requestDate || new Date().toISOString().split('T')[0],
       contactNo: contactNo || '',
       organization: organization || 'Radiant Appliances',
-      title: title.trim(),
-      amount: Number(amount),
-      vendor: vendor.trim(),
+      title,
+      vendor,
+      amount,
       priority: priority || 'Medium',
       description: description || '',
       objective: objective || '',
       stakeholders: processedStakeholders,
-      ccList: processedCCList,
-      status: 'Pending',
-      requestDate: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/\//g, '-'),
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-   
-    const newRequest = new Request(requestData);
+      attachments: attachments || [],
+      ccList: ccList || [],
+      status: status || 'Pending',
+      createdBy: req.user?.id,
+      createdByName: req.user?.name || requester,
+      currentApproverIndex: 0
+    });
+
     const savedRequest = await newRequest.save();
-   
-    console.log('✅ Request created:', savedRequest._id);
-   
-    try {
-      await sendEpMailWithPdf(
-        savedRequest,
-        `EP Approval Request: ${savedRequest.title}`,
-        `EP: ${savedRequest.title}`
-      );
-    } catch (e) {
-      console.error('Request create notify:', e.message);
+    console.log("✅ EP Request saved successfully:", savedRequest._id);
+
+    // ====================== SEND EMAILS (AFTER savedRequest is created) ======================
+    
+    // 1. Send email to requester
+    await epNotify.sendEPRequestCreatedEmail(savedRequest);
+    console.log(`📧 Created email sent to requester: ${savedRequest.email}`);
+    
+    // 2. Send to first approver
+    if (savedRequest.stakeholders && savedRequest.stakeholders.length > 0) {
+      const firstApprover = savedRequest.stakeholders[0];
+      await epNotify.sendNewEPRequestEmail(savedRequest, firstApprover);
+      console.log(`📧 Approval request sent to: ${firstApprover.email}`);
+    }
+    
+    // 3. Send CC notifications
+    if (savedRequest.ccList && savedRequest.ccList.length > 0) {
+      for (const ccEmail of savedRequest.ccList) {
+        await epNotify.sendEPCCNotificationEmail(savedRequest, ccEmail);
+        console.log(`📧 CC email sent to: ${ccEmail}`);
+      }
     }
 
     res.status(201).json({
       success: true,
-      message: 'EP Request created successfully; email with PDF sent to requester/CC',
+      message: 'EP Request created successfully',
       data: savedRequest
     });
-   
-  } catch (error) {
-    console.error('❌ Create request error:', error);
+
+  } catch (err) {
+    console.error("❌ Error in createRequest:", err);
     res.status(500).json({
       success: false,
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: err.message || "Failed to create EP Request"
     });
   }
 };
 
-// UPDATE request
-exports.updateRequest = async (req, res) => {
+// ====================== GET ALL REQUESTS ======================
+const getRequests = async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid ID format' });
+    const { page = 1, limit = 50, status, department, priority } = req.query;
+    const query = {};
+    
+    if (status) query.status = status;
+    if (department) query.department = department;
+    if (priority) query.priority = priority;
+    
+    const requests = await Request.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+    
+    const total = await Request.countDocuments(query);
+    
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit),
+      data: requests
+    });
+  } catch (err) {
+    console.error("Error in getRequests:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch requests",
+      error: err.message
+    });
+  }
+};
+
+// ====================== GET SINGLE REQUEST ======================
+const getRequestById = async (req, res) => {
+  try {
+    const request = await Request.findById(req.params.id);
+    
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: "EP Request not found"
+      });
     }
-   
-    const updated = await Request.findByIdAndUpdate(
-      id,
-      { ...req.body, updatedAt: new Date() },
+    
+    res.status(200).json({
+      success: true,
+      data: request
+    });
+  } catch (err) {
+    console.error("Error in getRequestById:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch request",
+      error: err.message
+    });
+  }
+};
+
+// ====================== UPDATE REQUEST ======================
+const updateRequest = async (req, res) => {
+  try {
+    const request = await Request.findByIdAndUpdate(
+      req.params.id,
+      req.body,
       { new: true, runValidators: true }
     );
-   
-    if (!updated) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
-    }
-   
-    res.json({ success: true, message: 'Request updated', data: updated });
-  } catch (error) {
-    console.error('Update error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// DELETE request
-exports.deleteRequest = async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid ID format' });
-    }
-   
-    const deleted = await Request.findByIdAndDelete(id);
-    if (!deleted) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
-    }
-   
-    res.json({ success: true, message: 'Request deleted' });
-  } catch (error) {
-    console.error('Delete error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// Approve request (one senior approver finalizes; all stakeholders marked approved)
-exports.approveRequest = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { comments = '' } = req.body || {};
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid ID format' });
-    }
-
-    const request = await Request.findById(id);
+    
     if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
+      return res.status(404).json({
+        success: false,
+        message: "EP Request not found"
+      });
     }
-    if (['Approved', 'Rejected'].includes(request.status)) {
-      return res.status(400).json({ success: false, message: 'Request already finalized' });
-    }
-    if (!canActOnEp(req.user, request)) {
-      return res.status(403).json({ success: false, message: 'Not authorized to approve' });
-    }
-
-    const actor = req.user.name || req.user.email || 'Approver';
-    const nowIso = new Date().toISOString();
-    request.stakeholders.forEach((s) => {
-      if (s.status === 'Pending' || s.status === 'In-Process') {
-        s.status = 'Approved';
-        s.remarks = comments ? `${actor}: ${comments}` : `${actor}: Approved`;
-        s.dateTime = nowIso;
-      }
-    });
-    request.status = 'Approved';
-    request.approvedAt = new Date();
-    request.approvedBy = actor;
-    await request.save();
-
-    try {
-      await sendEpMailWithPdf(request, `EP Approved: ${request.title}`, `Approved by ${actor}`);
-    } catch (e) {
-      console.error(e.message);
-    }
-
-    res.json({
+    
+    res.status(200).json({
       success: true,
-      toast: 'success',
-      message: 'Request approved. CC notified with PDF.',
-      data: request,
+      message: "EP Request updated successfully",
+      data: request
     });
-  } catch (error) {
-    console.error('Approve error:', error);
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    console.error("Error in updateRequest:", err);
+    res.status(400).json({
+      success: false,
+      message: err.message
+    });
   }
 };
 
-// Reject request
-exports.rejectRequest = async (req, res) => {
+// ====================== DELETE REQUEST ======================
+const deleteRequest = async (req, res) => {
+  try {
+    const request = await Request.findByIdAndDelete(req.params.id);
+    
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: "EP Request not found"
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: "EP Request deleted successfully"
+    });
+  } catch (err) {
+    console.error("Error in deleteRequest:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message
+    });
+  }
+};
+
+// ====================== APPROVE REQUEST ======================
+const approveRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const { comments = '' } = req.body || {};
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid ID format' });
-    }
-
+    const { comments } = req.body;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name || 'Approver';
+    
     const request = await Request.findById(id);
+    
     if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
+      return res.status(404).json({
+        success: false,
+        message: "EP Request not found"
+      });
     }
-    if (['Approved', 'Rejected'].includes(request.status)) {
-      return res.status(400).json({ success: false, message: 'Request already finalized' });
+    
+    // Check if user can approve
+    if (!request.canUserApprove(userEmail)) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to approve this request"
+      });
     }
-    if (!canActOnEp(req.user, request)) {
-      return res.status(403).json({ success: false, message: 'Not authorized to reject' });
+    
+    const currentApprover = request.getCurrentApprover();
+    if (!currentApprover) {
+      return res.status(400).json({
+        success: false,
+        message: "No pending approver found"
+      });
     }
-
-    const actor = req.user.name || req.user.email || 'Approver';
-    const nowIso = new Date().toISOString();
-    request.stakeholders.forEach((s) => {
-      if (s.status === 'Pending' || s.status === 'In-Process') {
-        s.status = 'Rejected';
-        s.remarks = comments ? `${actor}: ${comments}` : `${actor}: Rejected`;
-        s.dateTime = nowIso;
+    
+    // Update current approver status
+    currentApprover.status = 'Approved';
+    currentApprover.remarks = comments || '';
+    currentApprover.dateTime = new Date();
+    currentApprover.approvedBy = userName;
+    
+    // Check if there are more approvers
+    const remainingPending = request.stakeholders.filter(s => s.status === 'Pending');
+    
+    if (remainingPending.length === 0) {
+      request.status = 'Approved';
+      request.approvedBy = userName;
+      request.approvedAt = new Date();
+      request.approvalComments = comments;
+      request.completionDate = new Date();
+    } else {
+      request.status = 'In-Process';
+      remainingPending.sort((a, b) => (a.approvalOrder || 0) - (b.approvalOrder || 0));
+    }
+    
+    await request.save();
+    
+    // Send approval email to requester
+    await epNotify.sendEPRequestApprovedEmail(request, { name: userName, remarks: comments });
+    console.log(`📧 Approval email sent to requester: ${request.email}`);
+    
+    // Send notification to next approver if any
+    const nextApprover = request.getCurrentApprover();
+    if (nextApprover && nextApprover !== currentApprover) {
+      await epNotify.sendNextEPApproverEmail(request, nextApprover, { name: userName });
+      console.log(`📧 Next approver notified: ${nextApprover.email}`);
+    }
+    
+    // Send CC notifications
+    if (request.ccList && request.ccList.length > 0) {
+      for (const ccEmail of request.ccList) {
+        await epNotify.sendEPCCNotificationEmail(request, ccEmail);
       }
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: "EP Request approved successfully",
+      data: request
     });
+  } catch (err) {
+    console.error("Error in approveRequest:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Failed to approve request"
+    });
+  }
+};
+
+// ====================== REJECT REQUEST ======================
+const rejectRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { comments } = req.body;
+    const userEmail = req.user?.email;
+    const userName = req.user?.name || 'Approver';
+    
+    const request = await Request.findById(id);
+    
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: "EP Request not found"
+      });
+    }
+    
+    // Check if user can reject
+    if (!request.canUserApprove(userEmail)) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to reject this request"
+      });
+    }
+    
+    const currentApprover = request.getCurrentApprover();
+    if (currentApprover) {
+      currentApprover.status = 'Rejected';
+      currentApprover.remarks = comments || '';
+      currentApprover.dateTime = new Date();
+      currentApprover.approvedBy = userName;
+    }
+    
     request.status = 'Rejected';
-    request.rejectionReason = comments || 'Rejected';
-    request.rejectedBy = actor;
+    request.rejectedBy = userName;
     request.rejectedAt = new Date();
+    request.rejectionReason = comments;
+    
     await request.save();
-
-    try {
-      await sendEpMailWithPdf(request, `EP Rejected: ${request.title}`, `Rejected by ${actor}`);
-    } catch (e) {
-      console.error(e.message);
+    
+    // Send rejection email
+    await epNotify.sendEPRequestRejectedEmail(request, { name: userName, remarks: comments });
+    console.log(`📧 Rejection email sent to requester: ${request.email}`);
+    
+    // Send CC notifications
+    if (request.ccList && request.ccList.length > 0) {
+      for (const ccEmail of request.ccList) {
+        await epNotify.sendEPCCNotificationEmail(request, ccEmail);
+        console.log(`📧 CC email sent to: ${ccEmail}`);
+      }
     }
-
-    res.json({ success: true, toast: 'error', message: 'Request rejected', data: request });
-  } catch (error) {
-    console.error('Reject error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// Dashboard stats
-exports.getDashboardStats = async (req, res) => {
-  try {
-    const total = await Request.countDocuments();
-    const pending = await Request.countDocuments({ status: 'Pending' });
-    const approved = await Request.countDocuments({ status: 'Approved' });
-    const rejected = await Request.countDocuments({ status: 'Rejected' });
-    const inProcess = await Request.countDocuments({ status: 'In-Process' });
-   
-    res.json({
+    
+    res.status(200).json({
       success: true,
-      data: { total, pending, approved, rejected, inProcess }
+      message: "EP Request rejected successfully",
+      data: request
     });
-  } catch (error) {
-    console.error('Stats error:', error);
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    console.error("Error in rejectRequest:", err);
+    res.status(500).json({
+      success: false,
+      message: err.message || "Failed to reject request"
+    });
   }
 };
 
-// Get requests by status
-exports.getRequestsByStatus = async (req, res) => {
+// ====================== GET MY PENDING REQUESTS ======================
+const getMyPendingRequests = async (req, res) => {
   try {
-    const { status } = req.params;
-    const requests = await Request.find({ status }).sort({ createdAt: -1 });
-    res.json({ success: true, data: requests, count: requests.length });
-  } catch (error) {
-    console.error('Get by status error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// Get my pending requests
-exports.getMyPendingRequests = async (req, res) => {
-  try {
+    const userEmail = req.user?.email;
+    
+    if (!userEmail) {
+      return res.status(401).json({
+        success: false,
+        message: "User email not found"
+      });
+    }
+    
     const requests = await Request.find({
+      'stakeholders.email': userEmail,
       'stakeholders.status': 'Pending',
       status: { $in: ['Pending', 'In-Process'] }
     }).sort({ createdAt: -1 });
-   
-    res.json({ success: true, data: requests, count: requests.length });
-  } catch (error) {
-    console.error('Get pending error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      data: requests
+    });
+  } catch (err) {
+    console.error("Error in getMyPendingRequests:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch pending requests",
+      error: err.message
+    });
   }
 };
 
-// Get requests by department
-exports.getRequestsByDepartment = async (req, res) => {
+// ====================== GET REQUESTS BY STATUS ======================
+const getRequestsByStatus = async (req, res) => {
+  try {
+    const { status } = req.params;
+    
+    const requests = await Request.find({ status }).sort({ createdAt: -1 });
+    
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      data: requests
+    });
+  } catch (err) {
+    console.error("Error in getRequestsByStatus:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch requests by status",
+      error: err.message
+    });
+  }
+};
+
+// ====================== GET REQUESTS BY DEPARTMENT ======================
+const getRequestsByDepartment = async (req, res) => {
   try {
     const { department } = req.params;
-    const requests = await Request.find({
-      department: { $regex: new RegExp(department, 'i') }
+    
+    const requests = await Request.find({ 
+      department: { $regex: new RegExp(department, 'i') } 
     }).sort({ createdAt: -1 });
-   
-    res.json({ success: true, data: requests, count: requests.length });
-  } catch (error) {
-    console.error('Get by department error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      data: requests
+    });
+  } catch (err) {
+    console.error("Error in getRequestsByDepartment:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch requests by department",
+      error: err.message
+    });
   }
 };
 
-// ✅ FIXED: Get unique departments (This was causing the error)
-exports.getDepartments = async (req, res) => {
+// ====================== GET DEPARTMENTS ======================
+const getDepartments = async (req, res) => {
   try {
     const departments = await Request.distinct('department');
     
-    // Clean empty or null values
-    const cleanDepartments = departments
-      .filter(dept => dept && typeof dept === 'string' && dept.trim() !== '')
-      .sort();
-
-    res.json({
+    res.status(200).json({
       success: true,
-      data: cleanDepartments,
-      count: cleanDepartments.length
+      departments: departments.filter(d => d)
     });
-  } catch (error) {
-    console.error('Get departments error:', error);
+  } catch (err) {
+    console.error("Error in getDepartments:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch departments',
-      error: error.message
+      message: "Failed to fetch departments",
+      error: err.message
     });
   }
+};
+
+// ====================== GET DASHBOARD STATS ======================
+const getDashboardStats = async (req, res) => {
+  try {
+    const total = await Request.countDocuments();
+    const pending = await Request.countDocuments({ status: 'Pending' });
+    const inProcess = await Request.countDocuments({ status: 'In-Process' });
+    const approved = await Request.countDocuments({ status: 'Approved' });
+    const rejected = await Request.countDocuments({ status: 'Rejected' });
+    const completed = await Request.countDocuments({ status: 'Completed' });
+    
+    // Get pending for current user
+    const userEmail = req.user?.email;
+    let myPending = 0;
+    if (userEmail) {
+      myPending = await Request.countDocuments({
+        'stakeholders.email': userEmail,
+        'stakeholders.status': 'Pending',
+        status: { $in: ['Pending', 'In-Process'] }
+      });
+    }
+    
+    // Get recent requests
+    const recent = await Request.find()
+      .sort({ createdAt: -1 })
+      .limit(10);
+    
+    res.status(200).json({
+      success: true,
+      stats: {
+        total,
+        pending,
+        inProcess,
+        approved,
+        rejected,
+        completed,
+        myPending
+      },
+      recent
+    });
+  } catch (err) {
+    console.error("Error in getDashboardStats:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch dashboard stats",
+      error: err.message
+    });
+  }
+};
+
+// ====================== EXPORTS ======================
+module.exports = {
+  createRequest,
+  getRequests,
+  getRequestById,
+  updateRequest,
+  deleteRequest,
+  approveRequest,
+  rejectRequest,
+  getMyPendingRequests,
+  getRequestsByStatus,
+  getRequestsByDepartment,
+  getDepartments,
+  getDashboardStats
 };

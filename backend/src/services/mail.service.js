@@ -1,452 +1,350 @@
-const nodemailer = require('nodemailer');
 const { Resend } = require('resend');
-const sgMail = require('@sendgrid/mail');
+const nodemailer = require('nodemailer');
 
-let transporter = null;
 let resendClient = null;
 
-function getTransporter() {
-  if (transporter) return transporter;
-  const host = String(process.env.SMTP_HOST || process.env.EMAIL_HOST || '').trim();
-  if (!host) return null;
-  const port = Number(process.env.SMTP_PORT || process.env.EMAIL_PORT || 587);
-  const secure =
-    process.env.SMTP_SECURE === 'true' ||
-    process.env.EMAIL_SECURE === 'true' ||
-    port === 465;
-  const user = process.env.SMTP_USER || process.env.EMAIL_USER;
-  const pass = process.env.SMTP_PASS || process.env.EMAIL_PASSWORD;
-  transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: user && pass ? { user, pass } : undefined,
-  });
-  return transporter;
-}
-
 function getFromAddress() {
-  return (
-    process.env.MAIL_FROM ||
-    process.env.SMTP_FROM ||
-    process.env.FROM_EMAIL ||
-    'noreply@localhost'
-  );
+  return process.env.FROM_EMAIL || 'onboarding@resend.dev';
 }
 
-// Professional Email Template Wrapper
-const getEmailWrapper = (content, title, statusColor = '#0f2a5e') => {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>LCGC RFQ - ${title}</title>
-      <style>
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-          background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
-          padding: 40px 20px;
-          line-height: 1.6;
-        }
-        .container {
-          max-width: 700px;
-          margin: 0 auto;
-          background: #ffffff;
-          border-radius: 24px;
-          overflow: hidden;
-          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-          animation: slideUp 0.5s ease-out;
-        }
-        @keyframes slideUp {
-          from {
-            opacity: 0;
-            transform: translateY(30px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        .header {
-          background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-          padding: 32px 40px;
-          position: relative;
-          text-align: center;
-        }
-        .header::before {
-          content: '';
-          position: absolute;
-          top: -40%;
-          right: -10%;
-          width: 250px;
-          height: 250px;
-          background: rgba(255, 255, 255, 0.08);
-          border-radius: 50%;
-        }
-        .header::after {
-          content: '';
-          position: absolute;
-          bottom: -40%;
-          left: -10%;
-          width: 200px;
-          height: 200px;
-          background: rgba(255, 255, 255, 0.06);
-          border-radius: 50%;
-        }
-        .header h1 {
-          color: white;
-          margin: 0;
-          font-size: 32px;
-          font-weight: 700;
-          letter-spacing: -0.5px;
-          position: relative;
-          z-index: 1;
-        }
-        .header p {
-          color: rgba(255, 255, 255, 0.85);
-          margin: 8px 0 0;
-          font-size: 14px;
-          position: relative;
-          z-index: 1;
-        }
-        .content {
-          padding: 40px;
-        }
-        .status-banner {
-          text-align: center;
-          padding: 16px;
-          margin: -20px 20px 20px 20px;
-          background: white;
-          border-radius: 60px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-          position: relative;
-          z-index: 2;
-        }
-        .status-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          padding: 8px 24px;
-          border-radius: 60px;
-          font-size: 14px;
-          font-weight: 700;
-        }
-        .status-approved { background: #d1fae5; color: #059669; }
-        .status-rejected { background: #fee2e2; color: #dc2626; }
-        .status-pending { background: #fef3c7; color: #d97706; }
-        .status-inprocess { background: #dbeafe; color: #2563eb; }
-        .section-title {
-          font-size: 18px;
-          font-weight: 700;
-          color: #1e3a8a;
-          margin: 28px 0 16px 0;
-          padding-bottom: 10px;
-          border-bottom: 2px solid #3b82f6;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-        .section-title:first-of-type {
-          margin-top: 0;
-        }
-        .section-icon {
-          font-size: 22px;
-        }
-        .info-grid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 16px;
-          background: #f8fafc;
-          border-radius: 16px;
-          padding: 20px;
-          margin: 15px 0;
-        }
-        .info-item {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-        .info-label {
-          font-size: 11px;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: #64748b;
-        }
-        .info-value {
-          font-size: 15px;
-          font-weight: 600;
-          color: #0f172a;
-        }
-        .amount-highlight {
-          font-size: 24px;
-          font-weight: 800;
-          color: #1e3a8a;
-          background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
-          padding: 16px 24px;
-          border-radius: 16px;
-          display: inline-block;
-          margin: 15px 0;
-        }
-        .workflow-table {
-          width: 100%;
-          border-collapse: collapse;
-          margin: 15px 0;
-          font-size: 13px;
-          border-radius: 12px;
-          overflow: hidden;
-        }
-        .workflow-table th {
-          background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-          color: white;
-          padding: 12px 14px;
-          text-align: left;
-          font-weight: 600;
-        }
-        .workflow-table td {
-          padding: 12px 14px;
-          border-bottom: 1px solid #e2e8f0;
-        }
-        .workflow-table tr:hover td {
-          background: #f8fafc;
-        }
-        .attachments-table {
-          width: 100%;
-          border-collapse: collapse;
-          margin: 15px 0;
-          font-size: 13px;
-          border-radius: 12px;
-          overflow: hidden;
-        }
-        .attachments-table th {
-          background: #f1f5f9;
-          color: #1e3a8a;
-          padding: 10px 12px;
-          text-align: left;
-          border-bottom: 2px solid #e2e8f0;
-        }
-        .attachments-table td {
-          padding: 10px 12px;
-          border-bottom: 1px solid #e2e8f0;
-        }
-        .remarks-box {
-          background: #fef3c7;
-          padding: 16px 20px;
-          border-radius: 12px;
-          margin: 20px 0;
-          border-left: 4px solid #d97706;
-        }
-        .next-approver {
-          background: linear-gradient(135deg, #e0f2fe, #bae6fd);
-          padding: 16px 20px;
-          border-radius: 12px;
-          margin: 20px 0;
-        }
-        .button {
-          display: inline-block;
-          padding: 12px 32px;
-          background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-          color: white;
-          text-decoration: none;
-          border-radius: 40px;
-          margin: 20px 0;
-          font-weight: 600;
-          font-size: 14px;
-          transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .button:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 8px 20px rgba(59, 130, 246, 0.3);
-        }
-        .footer {
-          text-align: center;
-          padding: 24px;
-          background: #f8fafc;
-          font-size: 12px;
-          color: #64748b;
-          border-top: 1px solid #e2e8f0;
-        }
-        @media (max-width: 600px) {
-          .content { padding: 24px; }
-          .info-grid { grid-template-columns: 1fr; gap: 12px; }
-          .header h1 { font-size: 24px; }
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>LCGC RFQ System</h1>
-          <p>Resolute Group - Procurement Excellence</p>
-        </div>
-        ${content}
-        <div class="footer">
-          <p>This is an automated message from LCGC RFQ System. Please do not reply to this email.</p>
-          <p>© ${new Date().getFullYear()} LCGC RFQ. All rights reserved.</p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-};
-
-// Professional Email Template for RFQ
-const getBeautifulRFQEmailHTML = (rfqData, action = 'created', actor = null, nextApprover = null) => {
-  const priorityMap = { 'H': 'High', 'M': 'Medium', 'L': 'Low' };
-  const priorityText = priorityMap[rfqData.priority] || 'Medium';
-  const priorityClass = rfqData.priority === 'H' ? 'status-pending' : rfqData.priority === 'M' ? 'status-inprocess' : 'status-approved';
+// ====================== BEAUTIFUL EMAIL TEMPLATE ======================
+const getBeautifulEmailHTML = (data, type, action, actor, nextApprover) => {
+  const isEP = data.stakeholders !== undefined;
+  const title = isEP ? data.title : data.titleOfActivity;
+  const requester = isEP ? data.requester : data.requesterName;
+  const department = data.department;
+  const email = isEP ? data.email : data.emailId;
+  const amount = data.amount || 0;
+  const priority = data.priority === 'H' ? 'High' : data.priority === 'M' ? 'Medium' : data.priority === 'L' ? 'Low' : (data.priority || 'Medium');
   
-  const itemsHtml = (rfqData.items || []).map((item, idx) => `
-    <tr>
-      <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0;">${idx + 1}</td>
-      <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0;"><strong>${escapeHtml(item.itemDescription)}</strong></td>
-      <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0;">${escapeHtml(item.uom || 'Pcs')}</td>
-      <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0;">${item.quantity || 1}</td>
-      <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0;">${escapeHtml(item.make || '-')}</td>
-    </tr>
-  `).join('');
+  const priorityColor = priority === 'High' ? '#dc2626' : priority === 'Medium' ? '#d97706' : '#16a34a';
+  const statusColor = data.status === 'Approved' ? '#059669' : data.status === 'Rejected' ? '#dc2626' : '#d97706';
   
-  let statusBadge = '';
-  let actionText = '';
+  let headerTitle = '';
+  let headerSubtitle = '';
+  let headerIcon = '';
   
-  switch(action) {
-    case 'created':
-      statusBadge = '<div class="status-badge status-inprocess"><span>🔄</span> New Request Created</div>';
-      actionText = 'A new RFQ request has been created and is awaiting your review.';
-      break;
-    case 'approved':
-      statusBadge = '<div class="status-badge status-approved"><span>✅</span> Request Approved</div>';
-      actionText = `The RFQ request has been APPROVED by ${actor?.name || 'the approver'}.`;
-      break;
-    case 'rejected':
-      statusBadge = '<div class="status-badge status-rejected"><span>❌</span> Request Rejected</div>';
-      actionText = `The RFQ request has been REJECTED by ${actor?.name || 'the approver'}.`;
-      break;
-    default:
-      statusBadge = '<div class="status-badge status-pending"><span>📋</span> Request Update</div>';
+  if (type === 'created') {
+    headerTitle = 'New Request Created';
+    headerSubtitle = 'A new procurement request requires your attention';
+    headerIcon = '📋';
+  } else if (type === 'approved') {
+    headerTitle = 'Request Approved';
+    headerSubtitle = `Approved by ${actor?.name || 'Approver'}`;
+    headerIcon = '✅';
+  } else if (type === 'rejected') {
+    headerTitle = 'Request Rejected';
+    headerSubtitle = `Rejected by ${actor?.name || 'Approver'}`;
+    headerIcon = '❌';
+  } else if (type === 'approval_needed') {
+    headerTitle = 'Action Required';
+    headerSubtitle = 'Your approval is needed for this request';
+    headerIcon = '⚠️';
   }
   
-  const content = `
-    <div class="status-banner">
-      ${statusBadge}
+  // Items HTML (for RFQ)
+  const itemsHtml = (data.items || []).map((item, idx) => `
+    <div style="background: ${idx % 2 === 0 ? '#f8fafc' : '#ffffff'}; padding: 12px 16px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+      <div style="flex: 0.5;"><span style="font-weight: 600; color: #64748b;">${idx + 1}</span></div>
+      <div style="flex: 3;"><strong style="color: #0f172a;">${escapeHtml(item.itemDescription)}</strong></div>
+      <div style="flex: 1;"><span style="color: #475569;">${item.uom || 'Pcs'}</span></div>
+      <div style="flex: 1;"><span style="color: #475569;">${item.quantity || 1}</span></div>
+      <div style="flex: 2;"><span style="color: #475569;">${escapeHtml(item.make || '-')}</span></div>
     </div>
-    
-    <p style="margin-bottom: 20px;">Dear ${actor ? actor.name : 'Team'},</p>
-    <p style="margin-bottom: 20px;">${actionText}</p>
-    
-    <!-- Requestor Information -->
-    <div class="section-title">
-      <span class="section-icon">👤</span>
-      <span>Requester Information</span>
-    </div>
-    <div class="info-grid">
-      <div class="info-item">
-        <span class="info-label">Full Name</span>
-        <span class="info-value">${escapeHtml(rfqData.requesterName)}</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Department</span>
-        <span class="info-value">${escapeHtml(rfqData.department)}</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Email Address</span>
-        <span class="info-value">${escapeHtml(rfqData.emailId)}</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Contact Number</span>
-        <span class="info-value">${escapeHtml(rfqData.contactNo)}</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Organization</span>
-        <span class="info-value">${escapeHtml(rfqData.organization)}</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Request Date</span>
-        <span class="info-value">${rfqData.requestDate ? new Date(rfqData.requestDate).toLocaleDateString() : new Date().toLocaleDateString()}</span>
-      </div>
-    </div>
-    
-    <!-- Activity Details -->
-    <div class="section-title">
-      <span class="section-icon">🎯</span>
-      <span>Activity Details</span>
-    </div>
-    <div class="info-grid">
-      <div class="info-item">
-        <span class="info-label">Title of Activity</span>
-        <span class="info-value" style="font-size: 16px; font-weight: 700;">${escapeHtml(rfqData.titleOfActivity)}</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Priority Level</span>
-        <span class="info-value"><span class="status-badge ${priorityClass}" style="padding: 4px 12px;">${priorityText}</span></span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Approval For</span>
-        <span class="info-value">${escapeHtml(rfqData.approvalFor || 'Operational Support and Action plan')}</span>
-      </div>
-      <div class="info-item">
-        <span class="info-label">Purpose & Objective</span>
-        <span class="info-value">${escapeHtml(rfqData.purposeAndObjective || '—')}</span>
-      </div>
-    </div>
-    
-    <!-- Items Table -->
-    <div class="section-title">
-      <span class="section-icon">📦</span>
-      <span>Item Details</span>
-    </div>
-    <table class="workflow-table" style="width: 100%;">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Item Description</th>
-          <th>UOM</th>
-          <th>Quantity</th>
-          <th>Make / Model</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${itemsHtml || '<tr><td colspan="5" style="text-align: center;">No items found</td></tr>'}
-      </tbody>
-    </table>
-    
-    ${actor && actor.remarks ? `
-    <div class="remarks-box">
-      <strong>📝 Remarks:</strong>
-      <p style="margin: 8px 0 0;">${escapeHtml(actor.remarks)}</p>
-    </div>
-    ` : ''}
-    
-    ${nextApprover ? `
-    <div class="next-approver">
-      <strong>⏳ Next Approver:</strong> ${escapeHtml(nextApprover.name)} (${escapeHtml(nextApprover.designation)})<br>
-      <strong>Email:</strong> ${escapeHtml(nextApprover.email)}
-    </div>
-    ` : ''}
-    
-    ${rfqData.ccTo && rfqData.ccTo.length > 0 ? `
-    <div style="margin-top: 20px; padding: 12px; background: #f1f5f9; border-radius: 12px; font-size: 12px;">
-      <strong>CC Recipients:</strong> ${rfqData.ccTo.join('; ')}
-    </div>
-    ` : ''}
-    
-    <div style="margin-top: 30px; text-align: center;">
-      <a href="${process.env.APP_URL || '#'}" class="button">🔍 View in Dashboard</a>
-    </div>
-  `;
+  `).join('');
   
-  return getEmailWrapper(content, `RFQ ${action === 'created' ? 'Created' : action === 'approved' ? 'Approved' : 'Updated'}`);
+  // Stakeholders HTML (for EP)
+  const stakeholdersHtml = (data.stakeholders || []).map((s, idx) => `
+    <div style="background: ${idx % 2 === 0 ? '#f8fafc' : '#ffffff'}; padding: 12px 16px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+      <div style="flex: 0.5;"><span style="font-weight: 600; color: #64748b;">${idx + 1}</span></div>
+      <div style="flex: 2;"><strong style="color: #0f172a;">${escapeHtml(s.name)}</strong></div>
+      <div style="flex: 2;"><span style="color: #475569;">${escapeHtml(s.designation || '—')}</span></div>
+      <div style="flex: 2;"><span style="color: #475569;">${escapeHtml(s.email)}</span></div>
+      <div style="flex: 1.5;">
+        <span style="display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; background: ${s.status === 'Approved' ? '#d1fae5' : s.status === 'Rejected' ? '#fee2e2' : '#fef3c7'}; color: ${s.status === 'Approved' ? '#059669' : s.status === 'Rejected' ? '#dc2626' : '#d97706'};">
+          ${s.status || 'Pending'}
+        </span>
+      </div>
+    </div>
+  `).join('');
+  
+  const ccHtml = (data.ccList || data.ccTo || []).map(cc => `
+    <span style="display: inline-block; background: #eff6ff; color: #1e40af; padding: 4px 12px; border-radius: 20px; font-size: 12px; margin: 4px;">
+      📧 ${escapeHtml(cc)}
+    </span>
+  `).join('');
+  
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LCGC RFQ - ${escapeHtml(title)}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 40px 20px;
+      line-height: 1.6;
+    }
+    .email-container {
+      max-width: 680px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 24px;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    }
+    .email-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 40px;
+      text-align: center;
+      position: relative;
+    }
+    .email-header-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    .email-header h1 {
+      color: white;
+      font-size: 28px;
+      font-weight: 700;
+      margin: 0 0 8px;
+    }
+    .email-header p {
+      color: rgba(255,255,255,0.9);
+      font-size: 14px;
+      margin: 0;
+    }
+    .email-content {
+      padding: 40px;
+    }
+    .greeting {
+      margin-bottom: 24px;
+    }
+    .greeting h2 {
+      font-size: 20px;
+      color: #0f172a;
+      margin: 0 0 8px;
+    }
+    .info-card {
+      background: #f8fafc;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+      border: 1px solid #e2e8f0;
+    }
+    .info-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #1e40af;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .info-item {
+      display: flex;
+      flex-direction: column;
+    }
+    .info-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .info-value {
+      font-size: 15px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+    .amount-box {
+      background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+      border-radius: 12px;
+      padding: 16px 24px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .amount-label {
+      font-size: 12px;
+      color: #64748b;
+      margin-bottom: 8px;
+    }
+    .amount-value {
+      font-size: 32px;
+      font-weight: 800;
+      color: #1e40af;
+    }
+    .priority-badge {
+      display: inline-block;
+      padding: 6px 16px;
+      border-radius: 30px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .priority-high { background: #fee2e2; color: #dc2626; }
+    .priority-medium { background: #fef3c7; color: #d97706; }
+    .priority-low { background: #dcfce7; color: #16a34a; }
+    .status-badge {
+      display: inline-block;
+      padding: 6px 16px;
+      border-radius: 30px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .status-approved { background: #d1fae5; color: #059669; }
+    .status-rejected { background: #fee2e2; color: #dc2626; }
+    .status-pending { background: #fef3c7; color: #d97706; }
+    .items-header {
+      display: flex;
+      background: #1e3a8a;
+      color: white;
+      padding: 12px 16px;
+      border-radius: 12px 12px 0 0;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .items-container {
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .cc-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .email-footer {
+      background: #f8fafc;
+      padding: 24px;
+      text-align: center;
+      border-top: 1px solid #e2e8f0;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 28px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      text-decoration: none;
+      border-radius: 40px;
+      font-weight: 600;
+      margin-top: 24px;
+    }
+    @media (max-width: 600px) {
+      .info-grid { grid-template-columns: 1fr; gap: 12px; }
+      .email-content { padding: 24px; }
+      .email-header { padding: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="email-header">
+      <div class="email-header-icon">${headerIcon}</div>
+      <h1>${headerTitle}</h1>
+      <p>${headerSubtitle}</p>
+    </div>
+    
+    <div class="email-content">
+      <div class="greeting">
+        <h2>Hello ${actor ? actor.name : 'Team'},</h2>
+        <p style="color: #475569; margin-top: 8px;">${type === 'created' ? 'A new request has been submitted for your review.' : type === 'approved' ? 'The request has been approved.' : type === 'rejected' ? 'The request has been rejected.' : 'Please review this request.'}</p>
+      </div>
+      
+      <div class="info-card">
+        <div class="info-title">👤 Requester Information</div>
+        <div class="info-grid">
+          <div class="info-item"><span class="info-label">Name</span><span class="info-value">${escapeHtml(requester)}</span></div>
+          <div class="info-item"><span class="info-label">Department</span><span class="info-value">${escapeHtml(department)}</span></div>
+          <div class="info-item"><span class="info-label">Email</span><span class="info-value">${escapeHtml(email)}</span></div>
+          <div class="info-item"><span class="info-label">Request Date</span><span class="info-value">${new Date().toLocaleDateString()}</span></div>
+        </div>
+      </div>
+      
+      <div class="info-card">
+        <div class="info-title">🎯 Request Details</div>
+        <div class="info-grid">
+          <div class="info-item"><span class="info-label">Title</span><span class="info-value" style="font-size: 16px; font-weight: 700;">${escapeHtml(title)}</span></div>
+          <div class="info-item"><span class="info-label">Priority</span><span class="info-value"><span class="priority-badge priority-${priority.toLowerCase()}">${priority}</span></span></div>
+          <div class="info-item"><span class="info-label">Status</span><span class="info-value"><span class="status-badge status-${data.status?.toLowerCase() || 'pending'}">${data.status || 'Pending'}</span></span></div>
+        </div>
+      </div>
+      
+      <div class="amount-box">
+        <div class="amount-label">💰 Total Amount</div>
+        <div class="amount-value">₹${amount.toLocaleString('en-IN')}</div>
+      </div>
+      
+      ${data.items && data.items.length > 0 ? `
+      <div class="info-title">📦 Items</div>
+      <div class="items-container">
+        <div class="items-header">
+          <div style="flex: 0.5;">#</div>
+          <div style="flex: 3;">Description</div>
+          <div style="flex: 1;">UOM</div>
+          <div style="flex: 1;">Qty</div>
+          <div style="flex: 2;">Make</div>
+        </div>
+        ${itemsHtml}
+      </div>
+      ` : ''}
+      
+      ${data.stakeholders && data.stakeholders.length > 0 ? `
+      <div class="info-title">👥 Approval Chain</div>
+      <div class="items-container">
+        <div class="items-header">
+          <div style="flex: 0.5;">#</div>
+          <div style="flex: 2;">Stakeholder</div>
+          <div style="flex: 2;">Designation</div>
+          <div style="flex: 2;">Email</div>
+          <div style="flex: 1.5;">Status</div>
+        </div>
+        ${stakeholdersHtml}
+      </div>
+      ` : ''}
+      
+      ${actor && actor.remarks ? `
+      <div class="info-card" style="background: #fef3c7; border-left: 4px solid #d97706;">
+        <div class="info-title">📝 Remarks</div>
+        <p style="color: #0f172a; margin: 0;">${escapeHtml(actor.remarks)}</p>
+      </div>
+      ` : ''}
+      
+      ${(data.ccList || data.ccTo || []).length > 0 ? `
+      <div class="info-card">
+        <div class="info-title">📧 CC Recipients</div>
+        <div class="cc-container">${ccHtml}</div>
+      </div>
+      ` : ''}
+      
+      <div style="text-align: center;">
+        <a href="${process.env.APP_URL || '#'}" class="btn">🔍 View in Dashboard</a>
+      </div>
+    </div>
+    
+    <div class="email-footer">
+      <p style="margin: 0 0 8px;">This is an automated message from LCGC RFQ System</p>
+      <p style="margin: 0; font-size: 11px; color: #94a3b8;">© ${new Date().getFullYear()} LCGC RFQ. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
 };
 
-// Generate Beautiful PDF Buffer (using pdfkit)
-const generateBeautifulPDF = async (rfqData) => {
+// ====================== BEAUTIFUL PDF TEMPLATE ======================
+const generateBeautifulPDF = async (data) => {
   const PDFDocument = require('pdfkit');
   
   return new Promise((resolve, reject) => {
@@ -455,9 +353,9 @@ const generateBeautifulPDF = async (rfqData) => {
         margin: 50, 
         size: 'A4',
         info: {
-          Title: `RFQ-${rfqData._id || Date.now()}`,
-          Author: rfqData.requesterName,
-          Subject: 'RFQ NPP Requisition'
+          Title: `Request-${data._id || Date.now()}`,
+          Author: data.requester || data.requesterName,
+          Subject: 'Procurement Request'
         }
       });
       
@@ -466,193 +364,206 @@ const generateBeautifulPDF = async (rfqData) => {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
       
-      // Header with gradient effect
-      doc.rect(0, 0, doc.page.width, 140).fill('#1e3a8a');
+      const isEP = data.stakeholders !== undefined;
+      const title = isEP ? data.title : data.titleOfActivity;
+      const requester = isEP ? data.requester : data.requesterName;
+      const department = data.department;
+      const email = isEP ? data.email : data.emailId;
+      const amount = data.amount || 0;
+      const priority = data.priority === 'H' ? 'High' : data.priority === 'M' ? 'Medium' : data.priority === 'L' ? 'Low' : (data.priority || 'Medium');
+      
+      // Gradient Header
+      doc.rect(0, 0, doc.page.width, 160).fill('#667eea');
+      doc.rect(0, 0, doc.page.width, 160).fill('#764ba2', 0.7);
       
       // Decorative circles
-      doc.circle(doc.page.width - 60, 40, 70).fill('#3b82f6', 0.15);
-      doc.circle(-30, 110, 90).fill('#3b82f6', 0.1);
-      doc.circle(doc.page.width - 100, 120, 50).fill('#60a5fa', 0.1);
+      doc.circle(doc.page.width - 80, 40, 80).fill('#ffffff', 0.08);
+      doc.circle(-40, 120, 100).fill('#ffffff', 0.06);
+      doc.circle(doc.page.width - 150, 130, 60).fill('#ffffff', 0.05);
       
       // Logo/Title
-      doc.fontSize(10)
-         .fillColor('#94a3b8')
+      doc.fontSize(12)
+         .fillColor('#ffffff')
          .font('Helvetica-Bold')
-         .text('LCGC RFQ SYSTEM', 50, 35, { continued: true })
-         .fillColor('#60a5fa')
+         .text('LCGC RFQ SYSTEM', 50, 45, { continued: true })
+         .fillColor('#e0e7ff')
          .text('  •  PROCUREMENT EXCELLENCE');
       
       // Main Title
-      doc.fontSize(28)
+      doc.fontSize(32)
          .fillColor('#ffffff')
          .font('Helvetica-Bold')
-         .text('Requisition RFQ (NPP)', 50, 65);
+         .text(isEP ? 'EP Approval Request' : 'Requisition RFQ (NPP)', 50, 85);
       
       // Status Badge
-      const status = rfqData.status || 'In-Process';
-      const statusColor = status === 'Approved' ? '#10b981' : status === 'Rejected' ? '#ef4444' : '#d97706';
+      const status = data.status || 'Pending';
+      const statusColor = status === 'Approved' ? '#10b981' : status === 'Rejected' ? '#ef4444' : '#f59e0b';
       
       doc.fontSize(11)
          .fillColor(statusColor)
          .font('Helvetica-Bold')
-         .text(`●  ${status}`, doc.page.width - 150, 55, { align: 'right' });
+         .text(`●  ${status}`, doc.page.width - 150, 80, { align: 'right' });
       
-      // Date generated
       doc.fontSize(9)
-         .fillColor('#94a3b8')
-         .font('Helvetica')
-         .text(`Generated: ${new Date().toLocaleString()}`, doc.page.width - 150, 75, { align: 'right' });
+         .fillColor('#c7d2fe')
+         .text(`Generated: ${new Date().toLocaleString()}`, doc.page.width - 150, 100, { align: 'right' });
       
-      // Reference ID
       doc.fontSize(9)
-         .fillColor('#94a3b8')
-         .text(`RFQ ID: ${rfqData._id || 'N/A'}`, doc.page.width - 150, 95, { align: 'right' });
+         .fillColor('#c7d2fe')
+         .text(`ID: ${data._id || 'N/A'}`, doc.page.width - 150, 120, { align: 'right' });
       
-      doc.moveDown(3);
+      doc.moveDown(4);
       
       // Requester Information Card
-      doc.roundedRect(50, doc.y, doc.page.width - 100, 140, 12)
+      doc.roundedRect(50, doc.y, doc.page.width - 100, 130, 12)
          .fill('#f8fafc')
          .stroke('#e2e8f0', 1);
       
       doc.fillColor('#1e3a8a')
          .fontSize(14)
          .font('Helvetica-Bold')
-         .text('👤  Requester Information', 70, doc.y - 125);
+         .text('👤  Requester Information', 70, doc.y - 115);
       
-      let startY = doc.y - 105;
+      let startY = doc.y - 95;
       
-      // Grid layout for requester info
-      const drawInfoRow = (label, value, x, y) => {
+      const drawField = (label, value, x, y) => {
         doc.fillColor('#64748b').fontSize(9).font('Helvetica').text(label, x, y);
         doc.fillColor('#0f172a').fontSize(11).font('Helvetica-Bold').text(value || '—', x + 100, y);
       };
       
-      drawInfoRow('Full Name:', rfqData.requesterName, 70, startY);
-      drawInfoRow('Department:', rfqData.department, 320, startY);
-      
+      drawField('Name:', requester, 70, startY);
+      drawField('Department:', department, 320, startY);
       startY += 25;
-      drawInfoRow('Email:', rfqData.emailId, 70, startY);
-      drawInfoRow('Contact No.:', rfqData.contactNo, 320, startY);
-      
+      drawField('Email:', email, 70, startY);
+      drawField('Organization:', data.organization || 'Radiant Appliances', 320, startY);
       startY += 25;
-      drawInfoRow('Organization:', rfqData.organization, 70, startY);
-      drawInfoRow('Request Date:', rfqData.requestDate ? new Date(rfqData.requestDate).toLocaleDateString() : new Date().toLocaleDateString(), 320, startY);
+      drawField('Request Date:', data.requestDate ? new Date(data.requestDate).toLocaleDateString() : new Date().toLocaleDateString(), 70, startY);
+      drawField('Contact No.:', data.contactNo || '—', 320, startY);
       
       doc.moveDown(2);
       
       // Activity Details Card
-      doc.roundedRect(50, doc.y, doc.page.width - 100, 110, 12)
+      doc.roundedRect(50, doc.y, doc.page.width - 100, 120, 12)
          .fill('#ffffff')
          .stroke('#e2e8f0', 1);
       
       doc.fillColor('#1e3a8a')
          .fontSize(14)
          .font('Helvetica-Bold')
-         .text('🎯  Activity Details', 70, doc.y - 95);
+         .text('🎯  Activity Details', 70, doc.y - 105);
       
-      let activityY = doc.y - 75;
+      let activityY = doc.y - 85;
       
-      doc.fillColor('#64748b').fontSize(9).font('Helvetica').text('Title of Activity:', 70, activityY);
-      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(12).text(rfqData.titleOfActivity || '—', 200, activityY);
+      doc.fillColor('#64748b').fontSize(9).font('Helvetica').text('Title:', 70, activityY);
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(12).text(title || '—', 130, activityY);
       
-      // Priority badge
-      const priorityMap = { 'H': 'High', 'M': 'Medium', 'L': 'Low' };
-      const priorityText = priorityMap[rfqData.priority] || 'Medium';
-      const priorityColor = rfqData.priority === 'H' ? '#dc2626' : rfqData.priority === 'M' ? '#d97706' : '#10b981';
-      
-      doc.roundedRect(doc.page.width - 140, activityY - 3, 80, 22, 11)
-         .fill(priorityColor);
-      doc.fillColor('#ffffff')
-         .font('Helvetica-Bold')
-         .fontSize(9)
-         .text(`${priorityText} Priority`, doc.page.width - 135, activityY + 2);
+      // Priority Badge
+      const priorityColor = priority === 'High' ? '#dc2626' : priority === 'Medium' ? '#d97706' : '#16a34a';
+      doc.roundedRect(doc.page.width - 140, activityY - 3, 80, 22, 11).fill(priorityColor);
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9).text(`${priority} Priority`, doc.page.width - 135, activityY + 2);
       
       activityY += 25;
-      doc.fillColor('#64748b').font('Helvetica').fontSize(9).text('Approval For:', 70, activityY);
-      doc.fillColor('#0f172a').font('Helvetica').text(rfqData.approvalFor || 'Operational Support and Action plan', 170, activityY);
+      doc.fillColor('#64748b').font('Helvetica').text('Vendor:', 70, activityY);
+      doc.fillColor('#0f172a').font('Helvetica').text(data.vendor || '—', 130, activityY);
       
       activityY += 25;
-      doc.fillColor('#64748b').font('Helvetica').text('Purpose & Objective:', 70, activityY);
-      doc.fillColor('#0f172a').font('Helvetica').text(rfqData.purposeAndObjective || '—', 190, activityY);
+      doc.fillColor('#64748b').font('Helvetica').text('Description:', 70, activityY);
+      doc.fillColor('#0f172a').font('Helvetica').text(data.description || 'No description', 150, activityY, { width: 400 });
+      
+      activityY += 25;
+      doc.fillColor('#64748b').font('Helvetica').text('Objective:', 70, activityY);
+      doc.fillColor('#0f172a').font('Helvetica').text(data.objective || '—', 150, activityY, { width: 400 });
       
       doc.moveDown(2);
       
-      // Items Table
-      doc.fillColor('#1e3a8a')
-         .fontSize(14)
-         .font('Helvetica-Bold')
-         .text('📦  Item Details', 50, doc.y);
+      // Amount Box
+      const amountY = doc.y;
+      doc.roundedRect(50, amountY, doc.page.width - 100, 60, 12)
+         .fill('linear-gradient(135deg, #667eea15, #764ba215)')
+         .stroke('#e2e8f0', 1);
       
-      doc.moveDown(0.8);
+      doc.fillColor('#64748b').fontSize(10).font('Helvetica').text('Total Amount', 70, amountY + 15);
+      doc.fillColor('#1e3a8a').fontSize(28).font('Helvetica-Bold').text(`₹ ${amount.toLocaleString('en-IN')}`, 70, amountY + 30);
       
-      // Table headers
-      const tableTop = doc.y;
-      const colPositions = [60, 180, 280, 360, 440];
+      doc.moveDown(3);
       
-      doc.rect(50, tableTop - 5, doc.page.width - 100, 30)
-         .fill('#1e3a8a');
-      
-      doc.fillColor('#ffffff')
-         .fontSize(10)
-         .font('Helvetica-Bold');
-      
-      doc.text('#', colPositions[0], tableTop);
-      doc.text('Item Description', colPositions[1], tableTop);
-      doc.text('UOM', colPositions[2], tableTop);
-      doc.text('Qty', colPositions[3], tableTop);
-      doc.text('Make / Model', colPositions[4], tableTop);
-      
-      // Table rows
-      let rowY = tableTop + 25;
-      const items = rfqData.items || [];
-      
-      items.forEach((item, idx) => {
-        if (rowY > doc.page.height - 100) {
-          doc.addPage();
-          rowY = 50;
-        }
+      // Items or Stakeholders Table
+      if (data.items && data.items.length > 0) {
+        doc.fillColor('#1e3a8a').fontSize(14).font('Helvetica-Bold').text('📦  Items', 50, doc.y);
+        doc.moveDown(0.8);
         
-        if (idx % 2 === 0) {
-          doc.rect(50, rowY - 3, doc.page.width - 100, 25)
-             .fill('#f8fafc');
-        }
+        const tableTop = doc.y;
+        const colPositions = [60, 160, 260, 340, 420];
         
-        doc.fillColor('#334155')
-           .fontSize(9)
-           .font('Helvetica');
+        doc.rect(50, tableTop - 5, doc.page.width - 100, 30).fill('#1e3a8a');
+        doc.fillColor('#ffffff').fontSize(10).font('Helvetica-Bold');
+        doc.text('#', colPositions[0], tableTop);
+        doc.text('Item Description', colPositions[1], tableTop);
+        doc.text('UOM', colPositions[2], tableTop);
+        doc.text('Qty', colPositions[3], tableTop);
+        doc.text('Make', colPositions[4], tableTop);
         
-        doc.text((idx + 1).toString(), colPositions[0], rowY);
-        doc.text(item.itemDescription || '—', colPositions[1], rowY, { width: 90 });
-        doc.text(item.uom || 'Pcs', colPositions[2], rowY);
-        doc.text((item.quantity || 0).toString(), colPositions[3], rowY);
-        doc.text(item.make || '—', colPositions[4], rowY);
+        let rowY = tableTop + 25;
+        data.items.forEach((item, idx) => {
+          if (rowY > doc.page.height - 100) { doc.addPage(); rowY = 50; }
+          if (idx % 2 === 0) doc.rect(50, rowY - 3, doc.page.width - 100, 25).fill('#f8fafc');
+          doc.fillColor('#334155').fontSize(9).font('Helvetica');
+          doc.text((idx + 1).toString(), colPositions[0], rowY);
+          doc.text(item.itemDescription || '—', colPositions[1], rowY, { width: 90 });
+          doc.text(item.uom || 'Pcs', colPositions[2], rowY);
+          doc.text((item.quantity || 0).toString(), colPositions[3], rowY);
+          doc.text(item.make || '—', colPositions[4], rowY);
+          rowY += 22;
+        });
+      }
+      
+      if (data.stakeholders && data.stakeholders.length > 0) {
+        doc.addPage();
+        doc.fillColor('#1e3a8a').fontSize(14).font('Helvetica-Bold').text('👥  Approval Workflow', 50, 50);
+        doc.moveDown(0.8);
         
-        rowY += 25;
-      });
+        const tableTop = doc.y;
+        const colPositions = [60, 160, 280, 380, 480];
+        
+        doc.rect(50, tableTop - 5, doc.page.width - 100, 30).fill('#1e3a8a');
+        doc.fillColor('#ffffff').fontSize(9).font('Helvetica-Bold');
+        doc.text('#', colPositions[0], tableTop);
+        doc.text('Stakeholder', colPositions[1], tableTop);
+        doc.text('Designation', colPositions[2], tableTop);
+        doc.text('Email', colPositions[3], tableTop);
+        doc.text('Status', colPositions[4], tableTop);
+        
+        let rowY = tableTop + 25;
+        data.stakeholders.forEach((s, idx) => {
+          if (rowY > doc.page.height - 80) { doc.addPage(); rowY = 50; }
+          if (idx % 2 === 0) doc.rect(50, rowY - 3, doc.page.width - 100, 25).fill('#f8fafc');
+          doc.fillColor('#334155').fontSize(9).font('Helvetica');
+          doc.text((idx + 1).toString(), colPositions[0], rowY);
+          doc.text(s.name || '—', colPositions[1], rowY, { width: 110 });
+          doc.text(s.designation || '—', colPositions[2], rowY);
+          doc.text(s.email || '—', colPositions[3], rowY, { width: 90 });
+          const statusText = s.status || 'Pending';
+          const statusColor = statusText === 'Approved' ? '#10b981' : statusText === 'Rejected' ? '#ef4444' : '#f59e0b';
+          doc.fillColor(statusColor).text(statusText, colPositions[4], rowY);
+          doc.fillColor('#334155');
+          rowY += 22;
+        });
+      }
       
       // Footer
-      const footerY = doc.page.height - 70;
-      
-      doc.rect(0, footerY, doc.page.width, 70)
-         .fill('#f8fafc');
-      
-      doc.fillColor('#64748b')
-         .fontSize(8)
-         .font('Helvetica')
-         .text('This is an automatically generated RFQ document.', 50, footerY + 20, { align: 'center', width: doc.page.width - 100 });
-      
-      doc.text(`Generated on: ${new Date().toLocaleString()}`, 50, footerY + 38, { align: 'center', width: doc.page.width - 100 });
+      const footerY = doc.page.height - 60;
+      doc.rect(0, footerY, doc.page.width, 60).fill('#f8fafc');
+      doc.fillColor('#94a3b8').fontSize(8).font('Helvetica')
+         .text('This is an automatically generated document from LCGC RFQ System.', 50, footerY + 20, { align: 'center', width: doc.page.width - 100 });
+      doc.text(`© ${new Date().getFullYear()} LCGC RFQ. All rights reserved.`, 50, footerY + 38, { align: 'center', width: doc.page.width - 100 });
       
       doc.end();
-      
     } catch (error) {
       reject(error);
     }
   });
 };
 
-// Helper function to escape HTML
 function escapeHtml(str) {
   if (!str) return '';
   return str
@@ -660,135 +571,80 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/'/g, '&#39;')
+    .replace(/\n/g, '<br>');
 }
 
-/**
- * Main sendMail function with professional templates
- * @param {object} opts
- * @param {string|string[]} opts.to
- * @param {string|string[]} [opts.cc]
- * @param {string|string[]} [opts.bcc]
- * @param {string} opts.subject
- * @param {string} [opts.html]
- * @param {string} [opts.text]
- * @param {object} [opts.rfqData] - RFQ data for auto-generating beautiful template
- * @param {string} [opts.action] - 'created', 'approved', 'rejected'
- * @param {object} [opts.actor] - Person who performed action
- * @param {object} [opts.nextApprover] - Next approver if any
- * @param {{ filename: string, content: Buffer, contentType?: string }[]} [opts.attachments]
- */
+// ====================== MAIN SEND MAIL FUNCTION ======================
 async function sendMail(opts) {
-  const { to, cc, bcc, subject, html, text, rfqData, action, actor, nextApprover, attachments } = opts;
+  const { to, cc, subject, html, text, rfqData, epRequestData, action, actor, nextApprover } = opts;
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
+  
   if (toList.length === 0) {
     return { success: false, error: 'No recipients' };
   }
 
-  // Generate beautiful HTML if rfqData is provided
+  // Generate beautiful HTML if data is provided
   let finalHtml = html;
-  if (rfqData && !html) {
-    finalHtml = getBeautifulRFQEmailHTML(rfqData, action || 'created', actor, nextApprover);
+  if (!html && (rfqData || epRequestData)) {
+    const data = rfqData || epRequestData;
+    finalHtml = getBeautifulEmailHTML(data, action, action, actor, nextApprover);
   }
 
   const from = getFromAddress();
-  const normAttach = attachments || [];
-
-  // Generate PDF if rfqData provided and no attachments
-  let finalAttachments = [...normAttach];
-  if (rfqData && !normAttach.some(a => a.filename === 'RFQ-NPP.pdf')) {
+  
+  // Generate PDF
+  let pdfBuffer = null;
+  const requestData = rfqData || epRequestData;
+  if (requestData) {
     try {
-      const pdfBuffer = await generateBeautifulPDF(rfqData);
-      finalAttachments.push({
-        filename: `RFQ-${rfqData._id || Date.now()}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf'
-      });
+      pdfBuffer = await generateBeautifulPDF(requestData);
     } catch (pdfErr) {
       console.error('PDF generation error:', pdfErr.message);
     }
   }
 
-  // Try SMTP first
-  const t = getTransporter();
-  if (t) {
-    try {
-      await t.sendMail({
-        from,
-        to: toList,
-        cc: cc?.length ? cc : undefined,
-        bcc: bcc?.length ? bcc : undefined,
-        subject,
-        html: finalHtml,
-        text: text || (finalHtml ? undefined : subject),
-        attachments: finalAttachments.map(a => ({
-          filename: a.filename,
-          content: a.content,
-          contentType: a.contentType
-        })),
-      });
-      return { success: true, via: 'smtp' };
-    } catch (e) {
-      console.error('SMTP send error:', e.message);
-    }
+  // Send via Resend
+  if (!process.env.RESEND_API_KEY) {
+    console.error('❌ RESEND_API_KEY not configured');
+    return { success: false, error: 'RESEND_API_KEY not configured' };
   }
 
-  // Try Resend
-  if (process.env.RESEND_API_KEY) {
-    try {
-      if (!resendClient) resendClient = new Resend(process.env.RESEND_API_KEY);
-      const resendFrom = from && from !== 'noreply@localhost' ? from : 'onboarding@resend.dev';
-      const payload = {
-        from: resendFrom,
-        to: toList,
-        subject,
-        html: finalHtml || `<p>${text || subject}</p>`,
-        text: text || '',
-      };
-      if (cc?.length) payload.cc = Array.isArray(cc) ? cc : [cc];
-      if (finalAttachments.length) {
-        payload.attachments = finalAttachments.map(a => ({
-          filename: a.filename,
-          content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : Buffer.from(a.content).toString('base64'),
-        }));
-      }
-      const { data, error } = await resendClient.emails.send(payload);
-      if (error) return { success: false, error: error.message || String(error) };
-      return { success: true, via: 'resend', id: data?.id };
-    } catch (e) {
-      console.error('Resend error:', e.message);
+  try {
+    if (!resendClient) resendClient = new Resend(process.env.RESEND_API_KEY);
+    
+    const payload = {
+      from: from,
+      to: toList,
+      subject: subject,
+      html: finalHtml || `<p>${text || subject}</p>`,
+      text: text || '',
+    };
+    
+    if (cc?.length) payload.cc = Array.isArray(cc) ? cc : [cc];
+    
+    if (pdfBuffer) {
+      payload.attachments = [{
+        filename: `Request_${requestData._id || Date.now()}.pdf`,
+        content: pdfBuffer.toString('base64'),
+      }];
     }
-  }
-
-  // Try SendGrid
-  if (process.env.SENDGRID_API_KEY && process.env.SENDGRID_API_KEY !== 'SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
-    try {
-      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-      await sgMail.send({
-        to: toList,
-        from: { email: from, name: process.env.FROM_NAME || 'LCGC RFQ' },
-        cc: cc?.length ? cc : undefined,
-        subject,
-        html: finalHtml || `<p>${text || subject}</p>`,
-        text: text || '',
-        attachments: finalAttachments.map(a => ({
-          content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : Buffer.from(a.content).toString('base64'),
-          filename: a.filename,
-          type: a.contentType,
-        })),
-      });
-      return { success: true, via: 'sendgrid' };
-    } catch (e) {
-      console.error('SendGrid error:', e.message);
+    
+    console.log(`📧 Sending email to: ${toList.join(', ')}`);
+    const { data, error } = await resendClient.emails.send(payload);
+    
+    if (error) {
+      console.error('❌ Resend error:', error);
+      return { success: false, error: error.message };
     }
+    
+    console.log(`✅ Email sent! ID: ${data?.id}`);
+    return { success: true, via: 'resend', id: data?.id };
+    
+  } catch (e) {
+    console.error('❌ Error:', e.message);
+    return { success: false, error: e.message };
   }
-
-  console.warn('[MAIL] No provider configured', { to: toList, subject });
-  return {
-    success: false,
-    via: 'none',
-    error: 'No email provider configured. Set SMTP_HOST, RESEND_API_KEY, or SENDGRID_API_KEY in .env',
-  };
 }
 
-module.exports = { sendMail, getFromAddress, generateBeautifulPDF, getBeautifulRFQEmailHTML };
+module.exports = { sendMail, getFromAddress, generateBeautifulPDF };
