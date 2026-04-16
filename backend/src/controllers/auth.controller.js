@@ -62,7 +62,7 @@ const saveOTP = async (email, mobile, otp, type) => {
   });
 };
 
-// ==================== EMAIL (SMTP / Resend / SendGrid) ====================
+// ==================== EMAIL FUNCTIONS ====================
 
 const sendEmailWithResend = async (to, subject, html, text, ccList = []) => {
   const recipient = Array.isArray(to) ? to[0] : to;
@@ -180,13 +180,13 @@ exports.sendRegistrationOTP = async (req, res) => {
     if (!mailResult || mailResult.success === false) {
       return res.status(502).json({
         success: false,
-        message: mailResult?.error || 'Email could not be sent. Configure SMTP or RESEND_API_KEY; with Resend test domain you can only mail your signup address.',
+        message: mailResult?.error || 'Email could not be sent.',
       });
     }
 
     res.json({
       success: true,
-      message: "OTP sent successfully to your email" + (ccArray.length > 0 ? ` and CC'd to ${ccArray.length} recipient(s)` : ""),
+      message: "OTP sent successfully to your email",
       devOTP: process.env.NODE_ENV === 'development' ? otp : undefined
     });
 
@@ -268,9 +268,7 @@ exports.sendEmailOTP = async (req, res) => {
     if (!mailResult || mailResult.success === false) {
       return res.status(502).json({
         success: false,
-        message:
-          mailResult?.error ||
-          'Email could not be sent. Use a verified Resend domain as FROM_EMAIL, or SMTP. Note: onboarding@resend.dev only sends to your Resend signup email.',
+        message: mailResult?.error || 'Email could not be sent.',
         devOTP: process.env.NODE_ENV === 'development' ? otp : undefined,
       });
     }
@@ -413,7 +411,7 @@ exports.register = async (req, res) => {
       success: true,
       message: "User registered successfully",
       token,
-            user: {
+      user: {
         id: user._id,
         name: user.name,
         email: user.email,
@@ -473,7 +471,7 @@ exports.login = async (req, res) => {
       success: true,
       message: "Login successful",
       token,
-            user: {
+      user: {
         id: user._id,
         name: user.name,
         email: user.email,
@@ -498,13 +496,194 @@ exports.login = async (req, res) => {
 
 exports.getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id || req.user.id).select("-password");
+    const user = await User.findById(req.user.id || req.user._id).select("-password");
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
-    res.json({ success: true, user });
+    res.json({ 
+      success: true, 
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        department: user.department,
+        contactNo: user.contactNo,
+        organization: user.organization,
+        profileImage: user.profileImage || '',
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
+        rights: user.rights || {}
+      }
+    });
   } catch (error) {
     console.error("Get Me error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== UPDATE PROFILE ====================
+
+exports.updateProfile = async (req, res) => {
+  try {
+    const { name, email, contactNo, department, organization, dateOfBirth, workspaces } = req.body;
+    const user = await User.findById(req.user.id || req.user._id);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    if (name) user.name = name.trim();
+    if (email && email.toLowerCase() !== user.email) {
+      const exists = await User.findOne({ email: email.toLowerCase() });
+      if (exists && String(exists._id) !== String(user._id)) {
+        return res.status(400).json({ success: false, message: 'Email already in use' });
+      }
+      user.email = email.toLowerCase();
+    }
+    if (contactNo !== undefined) user.contactNo = contactNo;
+    if (department !== undefined) user.department = department;
+    if (organization !== undefined) user.organization = organization;
+    if (dateOfBirth !== undefined) user.dateOfBirth = dateOfBirth ? new Date(dateOfBirth) : null;
+    if (workspaces !== undefined) user.workspaces = Array.isArray(workspaces) ? workspaces : [];
+    
+    await user.save();
+    
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        department: user.department,
+        contactNo: user.contactNo,
+        organization: user.organization,
+        profileImage: user.profileImage || '',
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
+        rights: user.rights || {},
+      },
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== CHANGE PASSWORD ====================
+
+exports.changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Current and new password required' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'New passwords do not match' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+    
+    const user = await User.findById(req.user.id || req.user._id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+    
+    user.password = newPassword;
+    await user.save();
+    
+    res.json({ 
+      success: true, 
+      message: 'Password changed successfully',
+      toast: 'success'
+    });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== UPLOAD PROFILE PHOTO ====================
+
+exports.uploadProfilePhoto = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image uploaded' });
+    }
+    
+    const profileImageUrl = `/uploads/profiles/${req.file.filename}`;
+    const user = await User.findById(req.user.id || req.user._id);
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    user.profileImage = profileImageUrl;
+    user.avatar = profileImageUrl;
+    await user.save();
+    
+    res.json({
+      success: true,
+      message: 'Profile photo uploaded successfully',
+      profileImage: profileImageUrl,
+      avatar: profileImageUrl,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        profileImage: user.profileImage,
+        role: user.role,
+        department: user.department,
+        contactNo: user.contactNo,
+        organization: user.organization,
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
+        rights: user.rights || {},
+      },
+    });
+  } catch (error) {
+    console.error('Upload profile photo error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ==================== CLEAR AVATAR ====================
+
+exports.clearAvatar = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id || req.user._id);
+    if (user) {
+      user.profileImage = '';
+      user.avatar = '';
+      await user.save();
+    }
+    res.json({ 
+      success: true, 
+      message: 'Avatar removed successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        profileImage: '',
+        role: user.role,
+        department: user.department,
+        contactNo: user.contactNo,
+        organization: user.organization,
+        workspaces: user.workspaces || [],
+        dateOfBirth: user.dateOfBirth,
+        rights: user.rights || {},
+      }
+    });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -530,7 +709,7 @@ exports.refreshUserSession = async (req, res) => {
       success: true,
       message: "Session refreshed successfully",
       token: newToken,
-            user: {
+      user: {
         id: user._id,
         name: user.name,
         email: user.email,
@@ -550,7 +729,7 @@ exports.refreshUserSession = async (req, res) => {
   }
 };
 
-// ==================== GET DEPARTMENTS DROPDOWN ====================
+// ==================== GET DEPARTMENTS ====================
 
 exports.getDepartments = async (req, res) => {
   try {
@@ -560,7 +739,6 @@ exports.getDepartments = async (req, res) => {
       'Legal', 'Supply Chain', 'Engineering'
     ];
 
-    // Also get unique departments from users
     const userDepts = await User.distinct('department');
     const allDepts = [...new Set([...departments, ...userDepts.filter(Boolean)])].sort();
 
@@ -574,7 +752,7 @@ exports.getDepartments = async (req, res) => {
   }
 };
 
-// ==================== GET MANAGERS DROPDOWN ====================
+// ==================== GET MANAGERS ====================
 
 exports.getManagers = async (req, res) => {
   try {
@@ -583,7 +761,6 @@ exports.getManagers = async (req, res) => {
       'name email role department'
     ).lean();
 
-    // Also include hardcoded default approvers
     const defaultApprovers = [
       { name: 'Vijay Parashar', email: 'vijay.parashar@radiant.com', designation: 'Manager', department: 'Purchase' },
       { name: 'Ravib', email: 'ravib@radiant.com', designation: 'A-GM', department: 'Operations' },
@@ -605,347 +782,6 @@ exports.getManagers = async (req, res) => {
     });
   } catch (error) {
     console.error("Get managers error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== CREATE EP REQUEST ====================
-
-exports.createEPRequest = async (req, res) => {
-  try {
-    const {
-      requester, department, email, contactNo, organization,
-      title, amount, vendor, priority, description, objective,
-      requestDate, stakeholders, ccList, attachments
-    } = req.body;
-
-    if (!title || !amount || !vendor || !email) {
-      return res.status(400).json({ success: false, message: "Title, amount, vendor and email are required" });
-    }
-
-    // Determine initial status based on stakeholders
-    const validStakeholders = (stakeholders || []).filter(s => s.name && s.email);
-    const initialStatus = validStakeholders.length > 0 ? 'In-Process' : 'Pending';
-
-    // Try to use EPRequest model if it exists, otherwise use a basic object
-    let epRequest;
-    try {
-      epRequest = new EPRequest({
-        requester: requester || '',
-        department: department || '',
-        email: email || '',
-        contactNo: contactNo || '',
-        organization: organization || 'Radiant Appliances',
-        title,
-        amount: Number(amount),
-        vendor,
-        priority: priority || 'Medium',
-        description: description || '',
-        objective: objective || '',
-        requestDate: requestDate || new Date().toISOString().split('T')[0],
-        status: initialStatus,
-        stakeholders: validStakeholders.map((s, i) => ({
-          ...s,
-          approvalOrder: s.approvalOrder || i + 1,
-          status: 'Pending'
-        })),
-        ccList: ccList || [],
-        attachments: (attachments || []).map(att => ({
-          name: att.name,
-          fileSize: att.fileSize,
-          remark: att.remark,
-          fileUrl: att.fileUrl || ''
-        })),
-        createdBy: req.user ? req.user.id : null
-      });
-      await epRequest.save();
-    } catch (modelErr) {
-      console.error('EPRequest model error:', modelErr);
-      return res.status(500).json({ success: false, message: 'EP Request model not found. Please check your request.js model.' });
-    }
-
-    try {
-      await sendEpMailWithPdf(
-        epRequest,
-        `EP Approval Request: ${title} - ${requester || email}`,
-        `EP: ${title} — ${initialStatus}`
-      );
-    } catch (notifyErr) {
-      console.error('EP create notify:', notifyErr.message);
-    }
-
-    res.status(201).json({
-      success: true,
-      message: `EP Request created successfully! Email with PDF to requester${ccList?.length ? ` (CC: ${ccList.length})` : ''}.`,
-      data: { ...epRequest.toObject(), id: epRequest._id }
-    });
-
-  } catch (error) {
-    console.error("Create EP Request error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== GET ALL EP REQUESTS ====================
-
-exports.getAllEPRequests = async (req, res) => {
-  try {
-    const { department, status, priority, startDate, endDate, vendor } = req.query;
-
-    let filter = {};
-    if (department) filter.department = { $regex: department, $options: 'i' };
-    if (status) filter.status = status;
-    if (priority) filter.priority = priority;
-    if (vendor) filter.vendor = { $regex: vendor, $options: 'i' };
-    if (startDate || endDate) {
-      filter.requestDate = {};
-      if (startDate) filter.requestDate.$gte = startDate;
-      if (endDate) filter.requestDate.$lte = endDate;
-    }
-
-    const epRequests = await EPRequest.find(filter).sort({ createdAt: -1 }).lean();
-
-    const data = epRequests.map(req => ({
-      ...req,
-      id: req._id
-    }));
-
-    res.json({
-      success: true,
-      count: data.length,
-      data
-    });
-  } catch (error) {
-    console.error("Get EP Requests error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== GET EP REQUEST BY ID ====================
-
-exports.getEPRequestById = async (req, res) => {
-  try {
-    const epRequest = await EPRequest.findById(req.params.id).lean();
-    if (!epRequest) {
-      return res.status(404).json({ success: false, message: "EP Request not found" });
-    }
-    res.json({ success: true, data: { ...epRequest, id: epRequest._id } });
-  } catch (error) {
-    console.error("Get EP Request error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== UPDATE EP REQUEST ====================
-
-exports.updateEPRequest = async (req, res) => {
-  try {
-    const epRequest = await EPRequest.findByIdAndUpdate(
-      req.params.id,
-      { ...req.body, updatedAt: new Date() },
-      { new: true, runValidators: true }
-    );
-
-    if (!epRequest) {
-      return res.status(404).json({ success: false, message: "EP Request not found" });
-    }
-
-    res.json({ success: true, message: "EP Request updated successfully", data: epRequest });
-  } catch (error) {
-    console.error("Update EP Request error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== DELETE EP REQUEST ====================
-
-exports.deleteEPRequest = async (req, res) => {
-  try {
-    const epRequest = await EPRequest.findByIdAndDelete(req.params.id);
-    if (!epRequest) {
-      return res.status(404).json({ success: false, message: "EP Request not found" });
-    }
-    res.json({ success: true, message: "EP Request deleted successfully" });
-  } catch (error) {
-    console.error("Delete EP Request error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== APPROVE EP REQUEST ====================
-
-exports.approveEPRequest = async (req, res) => {
-  try {
-    const { comments = '' } = req.body;
-    const actor = req.user;
-    const epRequest = await EPRequest.findById(req.params.id);
-    if (!epRequest) {
-      return res.status(404).json({ success: false, message: "EP Request not found" });
-    }
-    if (['Approved', 'Rejected'].includes(epRequest.status)) {
-      return res.status(400).json({ success: false, message: "Request already finalized" });
-    }
-    if (!canActOnEpRequest(actor, epRequest)) {
-      return res.status(403).json({ success: false, message: "Not authorized to approve this request" });
-    }
-    const nowIso = new Date().toISOString();
-    const label = actor.name || actor.email || 'Approver';
-    epRequest.stakeholders.forEach((s) => {
-      if (s.status === 'Pending' || s.status === 'In-Process') {
-        s.status = 'Approved';
-        s.remarks = comments ? `${label}: ${comments}` : `${label}: Approved`;
-        s.dateTime = nowIso;
-      }
-    });
-    epRequest.status = 'Approved';
-    epRequest.approvedBy = label;
-    epRequest.approvedAt = new Date();
-    epRequest.approvalComments = comments;
-    await epRequest.save();
-
-    try {
-      await sendEpMailWithPdf(
-        epRequest,
-        `EP Approved: ${epRequest.title}`,
-        `Approved by ${label}`
-      );
-    } catch (e) {
-      console.error('EP approve notify:', e.message);
-    }
-
-    res.json({
-      success: true,
-      toast: 'success',
-      message: 'Request approved. CC list notified with PDF.',
-      data: epRequest,
-    });
-  } catch (error) {
-    console.error("Approve EP Request error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== REJECT EP REQUEST ====================
-
-exports.rejectEPRequest = async (req, res) => {
-  try {
-    const { comments = '' } = req.body;
-    const actor = req.user;
-    const epRequest = await EPRequest.findById(req.params.id);
-    if (!epRequest) {
-      return res.status(404).json({ success: false, message: "EP Request not found" });
-    }
-    if (['Approved', 'Rejected'].includes(epRequest.status)) {
-      return res.status(400).json({ success: false, message: "Request already finalized" });
-    }
-    if (!canActOnEpRequest(actor, epRequest)) {
-      return res.status(403).json({ success: false, message: "Not authorized to reject this request" });
-    }
-    const nowIso = new Date().toISOString();
-    const label = actor.name || actor.email || 'Approver';
-    epRequest.stakeholders.forEach((s) => {
-      if (s.status === 'Pending' || s.status === 'In-Process') {
-        s.status = 'Rejected';
-        s.remarks = comments ? `${label}: ${comments}` : `${label}: Rejected`;
-        s.dateTime = nowIso;
-      }
-    });
-    epRequest.status = 'Rejected';
-    epRequest.rejectionReason = comments;
-    epRequest.rejectedBy = label;
-    epRequest.rejectedAt = new Date();
-    await epRequest.save();
-
-    try {
-      await sendEpMailWithPdf(
-        epRequest,
-        `EP Rejected: ${epRequest.title}`,
-        `Rejected by ${label}`
-      );
-    } catch (e) {
-      console.error('EP reject notify:', e.message);
-    }
-
-    res.json({
-      success: true,
-      toast: 'error',
-      message: 'Request rejected. CC list notified with PDF.',
-      data: epRequest,
-    });
-  } catch (error) {
-    console.error("Reject EP Request error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== GET EP REQUEST STATS ====================
-
-exports.getEPRequestStats = async (req, res) => {
-  try {
-    const total = await EPRequest.countDocuments();
-    const pending = await EPRequest.countDocuments({ status: 'Pending' });
-    const approved = await EPRequest.countDocuments({ status: 'Approved' });
-    const rejected = await EPRequest.countDocuments({ status: 'Rejected' });
-    const inProcess = await EPRequest.countDocuments({ status: 'In-Process' });
-
-    const departmentStats = await EPRequest.aggregate([
-      { $group: { _id: '$department', count: { $sum: 1 }, totalAmount: { $sum: '$amount' } } },
-      { $sort: { count: -1 } }
-    ]);
-
-    res.json({
-      success: true,
-      stats: { total, pending, approved, rejected, inProcess },
-      departmentStats
-    });
-  } catch (error) {
-    console.error("Get EP stats error:", error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ==================== SEND EP REQUEST PDF EMAIL ====================
-
-exports.sendEPRequestEmail = async (req, res) => {
-  try {
-    const { toEmails, ccEmails, epData } = req.body;
-
-    if (!toEmails || !toEmails.length) {
-      return res.status(400).json({ success: false, message: "Recipient emails required" });
-    }
-
-    const emailHtml = generateEPApprovalEmailHTML(epData);
-    const emailText = `EP Approval Request: ${epData.title} | Amount: INR ${Number(epData.amount || 0).toLocaleString('en-IN')}`;
-    let pdf;
-    try {
-      pdf = await buildEpPdfBuffer(epData);
-    } catch (e) {
-      console.error('EP PDF:', e.message);
-    }
-
-    const list = Array.isArray(toEmails) ? toEmails : [toEmails];
-    const results = [];
-    for (const toEmail of list) {
-      const result = await sendMail({
-        to: toEmail,
-        cc: ccEmails?.length ? ccEmails : undefined,
-        subject: `EP Approval Request: ${epData.title}`,
-        html: emailHtml,
-        text: emailText,
-        attachments: pdf
-          ? [{ filename: 'EP-approval.pdf', content: pdf, contentType: 'application/pdf' }]
-          : [],
-      });
-      results.push({ email: toEmail, ...result });
-    }
-
-    res.json({
-      success: true,
-      message: `Email with PDF sent to ${list.length} recipient(s)`,
-      results
-    });
-  } catch (error) {
-    console.error("Send EP email error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -1023,7 +859,7 @@ exports.sendForgotPasswordLink = async (req, res) => {
     if (!mailResult.success) {
       return res.status(502).json({
         success: false,
-        message: mailResult.error || 'Email not configured or send failed. Set RESEND_API_KEY or SMTP in .env',
+        message: mailResult.error || 'Email not configured or send failed.',
       });
     }
     res.json({ success: true, message: 'If an account exists, reset instructions have been sent.' });
@@ -1049,7 +885,7 @@ exports.resetPasswordWithToken = async (req, res) => {
     const user = await User.findOne({
       resetPasswordToken: hash,
       resetPasswordExpire: { $gt: new Date() },
-    }).select('+resetPasswordToken +resetPasswordExpire');
+    });
     if (!user) {
       return res.status(400).json({ success: false, message: 'Invalid or expired token' });
     }
@@ -1062,6 +898,8 @@ exports.resetPasswordWithToken = async (req, res) => {
     res.status(500).json({ success: false, message: e.message });
   }
 };
+
+// ==================== SMS OTP ====================
 
 exports.sendSmsOTP = async (req, res) => {
   try {
@@ -1104,102 +942,357 @@ exports.sendSmsOTP = async (req, res) => {
   }
 };
 
-exports.updateProfile = async (req, res) => {
+// ==================== EP REQUEST METHODS ====================
+
+exports.createEPRequest = async (req, res) => {
   try {
-    const { name, email, contactNo, department, organization, dateOfBirth, workspaces } = req.body;
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+    const {
+      requester, department, email, contactNo, organization,
+      title, amount, vendor, priority, description, objective,
+      requestDate, stakeholders, ccList, attachments
+    } = req.body;
+
+    if (!title || !amount || !vendor || !email) {
+      return res.status(400).json({ success: false, message: "Title, amount, vendor and email are required" });
     }
-    if (name) user.name = name.trim();
-    if (email && email.toLowerCase() !== user.email) {
-      const exists = await User.findOne({ email: email.toLowerCase() });
-      if (exists && String(exists._id) !== String(user._id)) {
-        return res.status(400).json({ success: false, message: 'Email already in use' });
+
+    const validStakeholders = (stakeholders || []).filter(s => s.name && s.email);
+    const initialStatus = validStakeholders.length > 0 ? 'In-Process' : 'Pending';
+
+    let epRequest;
+    try {
+      epRequest = new EPRequest({
+        requester: requester || '',
+        department: department || '',
+        email: email || '',
+        contactNo: contactNo || '',
+        organization: organization || 'Radiant Appliances',
+        title,
+        amount: Number(amount),
+        vendor,
+        priority: priority || 'Medium',
+        description: description || '',
+        objective: objective || '',
+        requestDate: requestDate || new Date().toISOString().split('T')[0],
+        status: initialStatus,
+        stakeholders: validStakeholders.map((s, i) => ({
+          ...s,
+          approvalOrder: s.approvalOrder || i + 1,
+          status: 'Pending'
+        })),
+        ccList: ccList || [],
+        attachments: (attachments || []).map(att => ({
+          name: att.name,
+          fileSize: att.fileSize,
+          remark: att.remark,
+          fileUrl: att.fileUrl || ''
+        })),
+        createdBy: req.user ? req.user.id : null
+      });
+      await epRequest.save();
+    } catch (modelErr) {
+      console.error('EPRequest model error:', modelErr);
+      return res.status(500).json({ success: false, message: 'EP Request model not found.' });
+    }
+
+    try {
+      await sendEpMailWithPdf(
+        epRequest,
+        `EP Approval Request: ${title} - ${requester || email}`,
+        `EP: ${title} — ${initialStatus}`
+      );
+    } catch (notifyErr) {
+      console.error('EP create notify:', notifyErr.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `EP Request created successfully!`,
+      data: { ...epRequest.toObject(), id: epRequest._id }
+    });
+
+  } catch (error) {
+    console.error("Create EP Request error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAllEPRequests = async (req, res) => {
+  try {
+    const { department, status, priority, startDate, endDate, vendor } = req.query;
+
+    let filter = {};
+    if (department) filter.department = { $regex: department, $options: 'i' };
+    if (status) filter.status = status;
+    if (priority) filter.priority = priority;
+    if (vendor) filter.vendor = { $regex: vendor, $options: 'i' };
+    if (startDate || endDate) {
+      filter.requestDate = {};
+      if (startDate) filter.requestDate.$gte = startDate;
+      if (endDate) filter.requestDate.$lte = endDate;
+    }
+
+    const epRequests = await EPRequest.find(filter).sort({ createdAt: -1 }).lean();
+
+    const data = epRequests.map(req => ({
+      ...req,
+      id: req._id
+    }));
+
+    res.json({
+      success: true,
+      count: data.length,
+      data
+    });
+  } catch (error) {
+    console.error("Get EP Requests error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getEPRequestById = async (req, res) => {
+  try {
+    const epRequest = await EPRequest.findById(req.params.id).lean();
+    if (!epRequest) {
+      return res.status(404).json({ success: false, message: "EP Request not found" });
+    }
+    res.json({ success: true, data: { ...epRequest, id: epRequest._id } });
+  } catch (error) {
+    console.error("Get EP Request error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateEPRequest = async (req, res) => {
+  try {
+    const epRequest = await EPRequest.findByIdAndUpdate(
+      req.params.id,
+      { ...req.body, updatedAt: new Date() },
+      { new: true, runValidators: true }
+    );
+
+    if (!epRequest) {
+      return res.status(404).json({ success: false, message: "EP Request not found" });
+    }
+
+    res.json({ success: true, message: "EP Request updated successfully", data: epRequest });
+  } catch (error) {
+    console.error("Update EP Request error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteEPRequest = async (req, res) => {
+  try {
+    const epRequest = await EPRequest.findByIdAndDelete(req.params.id);
+    if (!epRequest) {
+      return res.status(404).json({ success: false, message: "EP Request not found" });
+    }
+    res.json({ success: true, message: "EP Request deleted successfully" });
+  } catch (error) {
+    console.error("Delete EP Request error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.approveEPRequest = async (req, res) => {
+  try {
+    const { comments = '' } = req.body;
+    const actor = req.user;
+    const epRequest = await EPRequest.findById(req.params.id);
+    if (!epRequest) {
+      return res.status(404).json({ success: false, message: "EP Request not found" });
+    }
+    if (['Approved', 'Rejected'].includes(epRequest.status)) {
+      return res.status(400).json({ success: false, message: "Request already finalized" });
+    }
+    if (!canActOnEpRequest(actor, epRequest)) {
+      return res.status(403).json({ success: false, message: "Not authorized to approve this request" });
+    }
+    const nowIso = new Date().toISOString();
+    const label = actor.name || actor.email || 'Approver';
+    epRequest.stakeholders.forEach((s) => {
+      if (s.status === 'Pending' || s.status === 'In-Process') {
+        s.status = 'Approved';
+        s.remarks = comments ? `${label}: ${comments}` : `${label}: Approved`;
+        s.dateTime = nowIso;
       }
-      user.email = email.toLowerCase();
+    });
+    epRequest.status = 'Approved';
+    epRequest.approvedBy = label;
+    epRequest.approvedAt = new Date();
+    epRequest.approvalComments = comments;
+    await epRequest.save();
+
+    try {
+      await sendEpMailWithPdf(
+        epRequest,
+        `EP Approved: ${epRequest.title}`,
+        `Approved by ${label}`
+      );
+    } catch (e) {
+      console.error('EP approve notify:', e.message);
     }
-    if (contactNo !== undefined) user.contactNo = contactNo;
-    if (department !== undefined) user.department = department;
-    if (organization !== undefined) user.organization = organization;
-    if (dateOfBirth !== undefined) user.dateOfBirth = dateOfBirth ? new Date(dateOfBirth) : null;
-    if (workspaces !== undefined) user.workspaces = Array.isArray(workspaces) ? workspaces : [];
-    await user.save();
+
     res.json({
       success: true,
-      message: 'Profile updated',
+      toast: 'success',
+      message: 'Request approved.',
+      data: epRequest,
+    });
+  } catch (error) {
+    console.error("Approve EP Request error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.rejectEPRequest = async (req, res) => {
+  try {
+    const { comments = '' } = req.body;
+    const actor = req.user;
+    const epRequest = await EPRequest.findById(req.params.id);
+    if (!epRequest) {
+      return res.status(404).json({ success: false, message: "EP Request not found" });
+    }
+    if (['Approved', 'Rejected'].includes(epRequest.status)) {
+      return res.status(400).json({ success: false, message: "Request already finalized" });
+    }
+    if (!canActOnEpRequest(actor, epRequest)) {
+      return res.status(403).json({ success: false, message: "Not authorized to reject this request" });
+    }
+    const nowIso = new Date().toISOString();
+    const label = actor.name || actor.email || 'Approver';
+    epRequest.stakeholders.forEach((s) => {
+      if (s.status === 'Pending' || s.status === 'In-Process') {
+        s.status = 'Rejected';
+        s.remarks = comments ? `${label}: ${comments}` : `${label}: Rejected`;
+        s.dateTime = nowIso;
+      }
+    });
+    epRequest.status = 'Rejected';
+    epRequest.rejectionReason = comments;
+    epRequest.rejectedBy = label;
+    epRequest.rejectedAt = new Date();
+    await epRequest.save();
+
+    try {
+      await sendEpMailWithPdf(
+        epRequest,
+        `EP Rejected: ${epRequest.title}`,
+        `Rejected by ${label}`
+      );
+    } catch (e) {
+      console.error('EP reject notify:', e.message);
+    }
+
+    res.json({
+      success: true,
+      toast: 'error',
+      message: 'Request rejected.',
+      data: epRequest,
+    });
+  } catch (error) {
+    console.error("Reject EP Request error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getEPRequestStats = async (req, res) => {
+  try {
+    const total = await EPRequest.countDocuments();
+    const pending = await EPRequest.countDocuments({ status: 'Pending' });
+    const approved = await EPRequest.countDocuments({ status: 'Approved' });
+    const rejected = await EPRequest.countDocuments({ status: 'Rejected' });
+    const inProcess = await EPRequest.countDocuments({ status: 'In-Process' });
+
+    const departmentStats = await EPRequest.aggregate([
+      { $group: { _id: '$department', count: { $sum: 1 }, totalAmount: { $sum: '$amount' } } },
+      { $sort: { count: -1 } }
+    ]);
+
+    res.json({
+      success: true,
+      stats: { total, pending, approved, rejected, inProcess },
+      departmentStats
+    });
+  } catch (error) {
+    console.error("Get EP stats error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+// ==================== CLEAR AVATAR ====================
+
+exports.clearAvatar = async (req, res) => {
+  try {
+    const User = require('../models/user.model');
+    const user = await User.findById(req.user.id || req.user._id);
+    if (user) {
+      user.profileImage = '';
+      user.avatar = '';
+      await user.save();
+    }
+    res.json({ 
+      success: true, 
+      message: 'Avatar removed successfully',
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
+        profileImage: '',
         role: user.role,
         department: user.department,
         contactNo: user.contactNo,
         organization: user.organization,
-        profileImage: user.profileImage || '',
         workspaces: user.workspaces || [],
         dateOfBirth: user.dateOfBirth,
         rights: user.rights || {},
-      },
+      }
     });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+  } catch (error) {
+    console.error('Clear avatar error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
-
-exports.changePassword = async (req, res) => {
+exports.sendEPRequestEmail = async (req, res) => {
   try {
-    const { currentPassword, newPassword, confirmPassword } = req.body;
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ success: false, message: 'Current and new password required' });
-    }
-    if (newPassword !== confirmPassword) {
-      return res.status(400).json({ success: false, message: 'Passwords do not match' });
-    }
-    if (newPassword.length < 6) {
-      return res.status(400).json({ success: false, message: 'Minimum 6 characters' });
-    }
-    const user = await User.findById(req.user._id);
-    const ok = await user.comparePassword(currentPassword);
-    if (!ok) {
-      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
-    }
-    user.password = newPassword;
-    await user.save();
-    res.json({ success: true, message: 'Password updated successfully', toast: 'success' });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
-  }
-};
+    const { toEmails, ccEmails, epData } = req.body;
 
-exports.uploadProfilePhoto = async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'No image uploaded' });
+    if (!toEmails || !toEmails.length) {
+      return res.status(400).json({ success: false, message: "Recipient emails required" });
     }
-    const rel = `/uploads/profiles/${req.file.filename}`;
-    const user = await User.findById(req.user._id);
-    user.profileImage = rel;
-    await user.save();
+
+    const emailHtml = generateEPApprovalEmailHTML(epData);
+    const emailText = `EP Approval Request: ${epData.title} | Amount: INR ${Number(epData.amount || 0).toLocaleString('en-IN')}`;
+    let pdf;
+    try {
+      pdf = await buildEpPdfBuffer(epData);
+    } catch (e) {
+      console.error('EP PDF:', e.message);
+    }
+
+    const list = Array.isArray(toEmails) ? toEmails : [toEmails];
+    const results = [];
+    for (const toEmail of list) {
+      const result = await sendMail({
+        to: toEmail,
+        cc: ccEmails?.length ? ccEmails : undefined,
+        subject: `EP Approval Request: ${epData.title}`,
+        html: emailHtml,
+        text: emailText,
+        attachments: pdf
+          ? [{ filename: 'EP-approval.pdf', content: pdf, contentType: 'application/pdf' }]
+          : [],
+      });
+      results.push({ email: toEmail, ...result });
+    }
+
     res.json({
       success: true,
-      message: 'Photo uploaded',
-      profileImage: rel,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        profileImage: user.profileImage,
-        role: user.role,
-        department: user.department,
-        contactNo: user.contactNo,
-        organization: user.organization,
-        workspaces: user.workspaces || [],
-        dateOfBirth: user.dateOfBirth,
-        rights: user.rights || {},
-      },
+      message: `Email with PDF sent to ${list.length} recipient(s)`,
+      results
     });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+  } catch (error) {
+    console.error("Send EP email error:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };

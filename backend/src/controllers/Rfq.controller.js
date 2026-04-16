@@ -21,55 +21,169 @@ const getAllRFQs = async (req, res) => {
   }
 };
 
-// Create new RFQ
+// Create new RFQ - FIXED VERSION
 const createRFQ = async (req, res) => {
   try {
-    // Basic validation
-    if (!req.body.titleOfActivity || !req.body.items || req.body.items.length === 0) {
+    console.log("📥 Received RFQ data:", JSON.stringify(req.body, null, 2));
+
+    // Extract data from request body (handle both formats)
+    let { 
+      titleOfActivity, 
+      items, 
+      requesterName,
+      department,
+      emailId,
+      contactNo,
+      requestDate,
+      organization,
+      approvalFor,
+      priority,
+      purposeAndObjective,
+      ccTo
+    } = req.body;
+
+    // FIX: If items is empty or invalid, check for alternative field names
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      // Try to extract items from form data (might be sent as stringified JSON)
+      if (req.body.itemsJson) {
+        try {
+          items = JSON.parse(req.body.itemsJson);
+        } catch (e) {
+          console.error("Failed to parse itemsJson:", e);
+        }
+      }
+      
+      // Check for individual item fields (if sent as separate fields)
+      if (!items && req.body.itemDescription) {
+        items = [{
+          itemDescription: req.body.itemDescription,
+          uom: req.body.uom || 'Pcs',
+          quantity: parseInt(req.body.quantity) || 1,
+          make: req.body.make || '',
+          alternativeSimilar: req.body.alternativeSimilar || '',
+          pictureExistingVendorReference: req.body.pictureExistingVendorReference || '',
+          remark: req.body.remark || ''
+        }];
+      }
+    }
+
+    // Enhanced validation with detailed error messages
+    if (!titleOfActivity) {
       return res.status(400).json({
         success: false,
-        message: "titleOfActivity and at least one item are required"
+        message: "titleOfActivity is required",
+        receivedData: req.body
       });
     }
 
-    const newRFQ = new RFQ(req.body);
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one item is required",
+        receivedItems: items,
+        receivedBody: req.body
+      });
+    }
+
+    // Validate each item has required fields
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i].itemDescription) {
+        return res.status(400).json({
+          success: false,
+          message: `Item ${i + 1} missing itemDescription`,
+          item: items[i]
+        });
+      }
+      if (!items[i].quantity || items[i].quantity < 1) {
+        return res.status(400).json({
+          success: false,
+          message: `Item ${i + 1} must have quantity >= 1`,
+          item: items[i]
+        });
+      }
+    }
+
+    // Set default values if not provided
+    const rfqData = {
+      requesterName: requesterName || 'Chandra Shekhar',
+      department: department || 'Purchase',
+      emailId: emailId || 'chandrashekhar@radiantappliances.com',
+      contactNo: contactNo || '8806668006',
+      requestDate: requestDate || new Date(),
+      organization: organization || 'Radaint',
+      titleOfActivity: titleOfActivity,
+      approvalFor: approvalFor || 'Operational Support and Action plan',
+      priority: priority || 'H',
+      purposeAndObjective: purposeAndObjective || '',
+      items: items,
+      ccTo: ccTo || [],
+      status: 'In-Process'
+    };
+
+    const newRFQ = new RFQ(rfqData);
     const savedRFQ = await newRFQ.save();
 
+    console.log("✅ RFQ saved successfully:", savedRFQ._id);
+
+    // Send email notification (don't block response if fails)
     try {
-      let pdf;
+      let pdf = null;
       try {
-        pdf = await buildRfqPdfBuffer(savedRFQ);
+        if (buildRfqPdfBuffer) {
+          pdf = await buildRfqPdfBuffer(savedRFQ);
+        }
       } catch (e) {
-        console.error('RFQ PDF:', e.message);
+        console.error('PDF generation error:', e.message);
       }
+      
       const to = savedRFQ.emailId;
-      if (to) {
-        const html = `<p><strong>Requisition RFQ (NPP)</strong></p><p>${savedRFQ.titleOfActivity || ''}</p><p>Priority: ${savedRFQ.priority || ''}</p>`;
+      if (to && sendMail) {
+        const html = `
+          <h2>Requisition RFQ (NPP)</h2>
+          <p><strong>Title:</strong> ${savedRFQ.titleOfActivity || ''}</p>
+          <p><strong>Priority:</strong> ${savedRFQ.priority || ''}</p>
+          <p><strong>Department:</strong> ${savedRFQ.department || ''}</p>
+          <p><strong>Request Date:</strong> ${savedRFQ.requestDate || new Date()}</p>
+          <h3>Items:</h3>
+          <table border="1" cellpadding="5">
+            <tr><th>Description</th><th>UOM</th><th>Quantity</th><th>Make</th></tr>
+            ${savedRFQ.items.map(item => `
+              <tr>
+                <td>${item.itemDescription}</td>
+                <td>${item.uom}</td>
+                <td>${item.quantity}</td>
+                <td>${item.make || '-'}</td>
+              </tr>
+            `).join('')}
+          </table>
+        `;
+        
         await sendMail({
           to,
           cc: savedRFQ.ccTo?.length ? savedRFQ.ccTo : undefined,
           subject: `RFQ (NPP): ${savedRFQ.titleOfActivity}`,
           html,
           text: savedRFQ.titleOfActivity,
-          attachments: pdf
-            ? [{ filename: 'RFQ-NPP.pdf', content: pdf, contentType: 'application/pdf' }]
-            : [],
+          attachments: pdf ? [{ filename: 'RFQ-NPP.pdf', content: pdf, contentType: 'application/pdf' }] : [],
         });
+        console.log("📧 Email sent successfully");
       }
     } catch (mailErr) {
-      console.error('RFQ mail:', mailErr.message);
+      console.error('Email sending error:', mailErr.message);
+      // Don't fail the request if email fails
     }
 
     res.status(201).json({
       success: true,
-      message: 'RFQ created successfully; email with PDF sent when emailId is set',
+      message: 'RFQ created successfully',
       data: savedRFQ,
     });
   } catch (err) {
-    console.error("Error in createRFQ:", err);
+    console.error("❌ Error in createRFQ:", err);
     res.status(400).json({ 
       success: false, 
-      message: err.message || "Failed to create RFQ"
+      message: err.message || "Failed to create RFQ",
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
 };
@@ -100,6 +214,61 @@ const getRFQById = async (req, res) => {
   }
 };
 
+// Update RFQ
+const updateRFQ = async (req, res) => {
+  try {
+    const rfq = await RFQ.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+    
+    if (!rfq) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'RFQ not found' 
+      });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'RFQ updated successfully',
+      data: rfq 
+    });
+  } catch (err) {
+    console.error("Error in updateRFQ:", err);
+    res.status(400).json({ 
+      success: false, 
+      message: err.message 
+    });
+  }
+};
+
+// Delete RFQ
+const deleteRFQ = async (req, res) => {
+  try {
+    const rfq = await RFQ.findByIdAndDelete(req.params.id);
+    
+    if (!rfq) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'RFQ not found' 
+      });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'RFQ deleted successfully' 
+    });
+  } catch (err) {
+    console.error("Error in deleteRFQ:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message 
+    });
+  }
+};
+
 // Get Vendors
 const getVendors = (req, res) => {
   res.status(200).json({
@@ -113,7 +282,7 @@ const getVendors = (req, res) => {
   });
 };
 
-// Get Departments (Added - useful for your form)
+// Get Departments
 const getDepartments = (req, res) => {
   res.status(200).json({
     success: true,
@@ -133,6 +302,8 @@ module.exports = {
   getAllRFQs,
   createRFQ,
   getRFQById,
+  updateRFQ,
+  deleteRFQ,
   getVendors,
-  getDepartments     // ← Added
+  getDepartments
 };
