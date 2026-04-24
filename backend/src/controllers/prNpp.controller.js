@@ -1,153 +1,166 @@
 const PrNpp = require('../models/prNpp.model');
-const { sendMail } = require('../services/mail.service');
-const { buildPrNppPdfBuffer } = require('../utils/prNppPdf');
 
-const SENIOR = new Set(['Admin', 'Manager', 'VP', 'GM', 'MD', 'Director', 'AGM', 'Approver']);
-
-function canAct(user, doc) {
-  if (!user || !doc) return false;
-  if (user.rights?.nppProcurement || user.rights?.epApproval) return true;
-  if (SENIOR.has(user.role)) return true;
-  const u = (user.email || '').toLowerCase();
-  return (doc.stakeholders || []).some(
-    (s) => (s.email || '').toLowerCase() === u && (s.status === 'Pending' || s.status === 'In-Process')
-  );
-}
-
+// Create PR NPP
 exports.createPrNpp = async (req, res) => {
   try {
-    const body = req.body;
-    if (!body.requester || !body.activityTitle || !body.email) {
-      return res.status(400).json({ success: false, message: 'requester, activityTitle, email required' });
-    }
-    const stakeholders = (body.stakeholders || []).map((s, i) => ({
-      ...s,
-      approvalOrder: s.approvalOrder || i + 1,
-      status: 'Pending',
-    }));
-    const pr = await PrNpp.create({
-      ...body,
-      email: body.email.toLowerCase(),
-      stakeholders,
-      status: 'In-Process',
-      createdBy: req.user?._id,
+    console.log("📥 Received PR NPP data:", JSON.stringify(req.body, null, 2));
+    
+    const {
+      requesterName, department, emailId, requestDate, contactNo, organization,
+      titleOfActivity, purposeAndObjective, vendor, amount, remarks, priority,
+      items, stakeholders, ccList, attachments,
+      source, status
+    } = req.body;
+
+    const newPr = new PrNpp({
+      requesterName,
+      department,
+      emailId,
+      requestDate: requestDate || new Date().toISOString().split('T')[0],
+      contactNo,
+      organization: organization || 'Radiant Appliances',
+      titleOfActivity,
+      purposeAndObjective,
+      vendor,
+      amount: amount || 0,
+      remarks,
+      priority: priority || 'M',
+      items: items || [],
+      stakeholders: stakeholders || [],
+      ccList: ccList || [],
+      attachments: attachments || [],
+      source: source || 'PR-REQUEST-NPP',
+      status: status || 'Pending'
     });
 
-    let pdf;
-    try {
-      pdf = await buildPrNppPdfBuffer(pr);
-    } catch (e) {
-      console.error(e.message);
-    }
-    const html = `<p>PR (NPP): <strong>${pr.activityTitle}</strong></p><p>Status: ${pr.status}</p>`;
-    await sendMail({
-      to: pr.email,
-      cc: pr.ccList?.length ? pr.ccList : undefined,
-      subject: `PR (NPP): ${pr.activityTitle}`,
-      html,
-      text: pr.activityTitle,
-      attachments: pdf
-        ? [{ filename: 'PR-NPP.pdf', content: pdf, contentType: 'application/pdf' }]
-        : [],
-    });
+    const savedPr = await newPr.save();
+    console.log("✅ PR NPP saved successfully:", savedPr._id);
 
-    res.status(201).json({ success: true, data: pr });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    res.status(201).json({
+      success: true,
+      message: 'PR NPP created successfully',
+      data: savedPr
+    });
+  } catch (err) {
+    console.error("❌ Error in createPrNpp:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
+// Get all PR NPP
 exports.listPrNpp = async (req, res) => {
   try {
     const rows = await PrNpp.find().sort({ createdAt: -1 });
     res.json({ success: true, data: rows });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
+// Get single PR NPP by ID
 exports.getPrNpp = async (req, res) => {
   try {
     const row = await PrNpp.findById(req.params.id);
-    if (!row) return res.status(404).json({ success: false, message: 'Not found' });
+    if (!row) {
+      return res.status(404).json({ success: false, message: "PR NPP not found" });
+    }
     res.json({ success: true, data: row });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
+// Update PR NPP
+exports.updatePrNpp = async (req, res) => {
+  try {
+    const updated = await PrNpp.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "PR NPP not found" });
+    }
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Delete PR NPP
+exports.deletePrNpp = async (req, res) => {
+  try {
+    const deleted = await PrNpp.findByIdAndDelete(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "PR NPP not found" });
+    }
+    res.json({ success: true, message: "PR NPP deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Approve PR NPP
 exports.approvePrNpp = async (req, res) => {
   try {
-    const doc = await PrNpp.findById(req.params.id);
-    if (!doc) return res.status(404).json({ success: false, message: 'Not found' });
-    if (['Approved', 'Rejected'].includes(doc.status)) {
-      return res.status(400).json({ success: false, message: 'Already finalized' });
+    const { id } = req.params;
+    const { comments } = req.body;
+    
+    const pr = await PrNpp.findById(id);
+    if (!pr) {
+      return res.status(404).json({ success: false, message: "PR NPP not found" });
     }
-    if (!canAct(req.user, doc)) {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
-    }
-    const label = req.user.name || req.user.email;
-    const now = new Date().toISOString();
-    doc.stakeholders.forEach((s) => {
-      if (s.status === 'Pending' || s.status === 'In-Process') {
-        s.status = 'Approved';
-        s.remarks = `${label}: ${req.body.comments || 'Approved'}`;
-        s.dateTime = now;
+    
+    if (pr.stakeholders && pr.stakeholders.length > 0) {
+      const pendingApprover = pr.stakeholders.find(s => s.status === 'Pending');
+      if (pendingApprover) {
+        pendingApprover.status = 'Approved';
+        pendingApprover.remarks = comments;
+        pendingApprover.dateTime = new Date().toISOString();
       }
-    });
-    doc.status = 'Approved';
-    await doc.save();
-    let pdf;
-    try {
-      pdf = await buildPrNppPdfBuffer(doc);
-    } catch (_) {}
-    await sendMail({
-      to: doc.email,
-      cc: doc.ccList?.length ? doc.ccList : undefined,
-      subject: `PR (NPP) Approved: ${doc.activityTitle}`,
-      html: `<p>Approved by ${label}</p>`,
-      attachments: pdf ? [{ filename: 'PR-NPP.pdf', content: pdf }] : [],
-    });
-    res.json({ success: true, toast: 'success', message: 'Approved', data: doc });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+      
+      const remainingPending = pr.stakeholders.filter(s => s.status === 'Pending');
+      pr.status = remainingPending.length === 0 ? 'Approved' : 'In-Process';
+    } else {
+      pr.status = 'Approved';
+    }
+    
+    pr.approvedAt = new Date();
+    await pr.save();
+    
+    res.json({ success: true, message: "PR NPP approved", data: pr });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
+// Reject PR NPP
 exports.rejectPrNpp = async (req, res) => {
   try {
-    const doc = await PrNpp.findById(req.params.id);
-    if (!doc) return res.status(404).json({ success: false, message: 'Not found' });
-    if (['Approved', 'Rejected'].includes(doc.status)) {
-      return res.status(400).json({ success: false, message: 'Already finalized' });
+    const { id } = req.params;
+    const { comments } = req.body;
+    
+    const pr = await PrNpp.findById(id);
+    if (!pr) {
+      return res.status(404).json({ success: false, message: "PR NPP not found" });
     }
-    if (!canAct(req.user, doc)) {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
-    }
-    const label = req.user.name || req.user.email;
-    const now = new Date().toISOString();
-    doc.stakeholders.forEach((s) => {
-      if (s.status === 'Pending' || s.status === 'In-Process') {
-        s.status = 'Rejected';
-        s.remarks = `${label}: ${req.body.comments || 'Rejected'}`;
-        s.dateTime = now;
+    
+    if (pr.stakeholders && pr.stakeholders.length > 0) {
+      const pendingApprover = pr.stakeholders.find(s => s.status === 'Pending');
+      if (pendingApprover) {
+        pendingApprover.status = 'Rejected';
+        pendingApprover.remarks = comments;
+        pendingApprover.dateTime = new Date().toISOString();
       }
-    });
-    doc.status = 'Rejected';
-    await doc.save();
-    let pdf;
-    try {
-      pdf = await buildPrNppPdfBuffer(doc);
-    } catch (_) {}
-    await sendMail({
-      to: doc.email,
-      cc: doc.ccList?.length ? doc.ccList : undefined,
-      subject: `PR (NPP) Rejected: ${doc.activityTitle}`,
-      html: `<p>Rejected by ${label}</p>`,
-      attachments: pdf ? [{ filename: 'PR-NPP.pdf', content: pdf }] : [],
-    });
-    res.json({ success: true, toast: 'error', message: 'Rejected', data: doc });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    }
+    
+    pr.status = 'Rejected';
+    pr.rejectedAt = new Date();
+    pr.rejectionComments = comments;
+    await pr.save();
+    
+    res.json({ success: true, message: "PR NPP rejected", data: pr });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };

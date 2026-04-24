@@ -17,6 +17,11 @@ const vendorRoutes = require("./routes/vendor.routes");
 const partRoutes = require("./routes/part.routes");
 const userRoutes = require("./routes/user.routes");
 
+// ✅ NEW NPP PROCUREMENT ROUTES
+const paymentNppRoutes = require("./routes/paymentNpp.routes");
+const poNppRoutes = require("./routes/poNpp.routes");
+const prNppRoutes = require("./routes/prNpp.routes");
+
 const app = express();
 
 // Configure multer for avatar uploads
@@ -112,7 +117,7 @@ app.get('/api/auth/profile', async (req, res) => {
     // Forward to auth/me endpoint or implement user fetch
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     const user = await User.findById(decoded.id).select('-password');
     
     if (!user) {
@@ -135,7 +140,7 @@ app.patch('/api/auth/profile', async (req, res) => {
     
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const updatedUser = await User.findByIdAndUpdate(
       decoded.id,
@@ -168,7 +173,7 @@ app.put('/api/auth/profile', async (req, res) => {
     
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const updatedUser = await User.findByIdAndUpdate(
       decoded.id,
@@ -203,7 +208,7 @@ app.post('/api/auth/change-password', async (req, res) => {
     const jwt = require('jsonwebtoken');
     const bcrypt = require('bcryptjs');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const user = await User.findById(decoded.id);
     if (!user) {
@@ -238,7 +243,7 @@ app.post('/api/auth/upload-avatar', upload.single('avatar'), async (req, res) =>
     
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const avatarUrl = `/uploads/avatars/${req.file.filename}`;
     
@@ -271,7 +276,7 @@ app.delete('/api/auth/avatar', async (req, res) => {
     
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const updatedUser = await User.findByIdAndUpdate(
       decoded.id,
@@ -299,7 +304,7 @@ app.post('/api/auth/remove-avatar', async (req, res) => {
     
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const updatedUser = await User.findByIdAndUpdate(
       decoded.id,
@@ -327,7 +332,7 @@ app.post('/api/auth/update-profile', async (req, res) => {
     
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const updatedUser = await User.findByIdAndUpdate(
       decoded.id,
@@ -358,7 +363,7 @@ app.patch('/api/auth/password', async (req, res) => {
     const jwt = require('jsonwebtoken');
     const bcrypt = require('bcryptjs');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const user = await User.findById(decoded.id);
     if (!user) {
@@ -392,7 +397,7 @@ app.put('/api/auth/password', async (req, res) => {
     const jwt = require('jsonwebtoken');
     const bcrypt = require('bcryptjs');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const User = require('./models/User');
+    const User = require('./models/user.model');
     
     const user = await User.findById(decoded.id);
     if (!user) {
@@ -421,7 +426,12 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/request", requestRoutes);
 app.use("/api/vendor", vendorRoutes);
 app.use("/api/rfq", require('./routes/rfq.routes'));
-app.use("/api/pr-npp", require('./routes/prNpp.routes'));
+
+// ✅ NEW NPP PROCUREMENT ROUTES
+app.use("/api/pr-npp", prNppRoutes);
+app.use("/api/po-npp", poNppRoutes);
+app.use("/api/payment-npp", paymentNppRoutes);
+
 app.use("/api/otp", require('./routes/otp.routes'));
 app.use("/api/part", partRoutes);
 app.use("/api/users", userRoutes);
@@ -453,7 +463,7 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: `Route ${req.method} ${req.url} not found`,
-    hint: 'Available routes: GET /api/health | POST /api/auth/login | GET /api/auth/me | GET /api/request | GET /api/ep-approval | GET /api/dashboard | GET /health | PATCH /api/auth/profile | POST /api/auth/change-password | POST /api/auth/upload-avatar | DELETE /api/auth/avatar'
+    hint: 'Available routes: GET /api/health | POST /api/auth/login | GET /api/auth/me | GET /api/request | GET /api/ep-approval | GET /api/dashboard | GET /health | PATCH /api/auth/profile | POST /api/auth/change-password | POST /api/auth/upload-avatar | DELETE /api/auth/avatar | POST /api/pr-npp | POST /api/po-npp | POST /api/payment-npp'
   });
 });
 
@@ -487,6 +497,10 @@ app.listen(PORT, () => {
   console.log(`   - DELETE /api/auth/avatar`);
   console.log(`✅ EP Approval: http://localhost:${PORT}/api/ep-approval`);
   console.log(`✅ Requests: http://localhost:${PORT}/api/request`);
+  console.log(`✅ NPP PROCUREMENT APIs:`);
+  console.log(`   - PR NPP     : http://localhost:${PORT}/api/pr-npp`);
+  console.log(`   - PO NPP     : http://localhost:${PORT}/api/po-npp`);
+  console.log(`   - Payment NPP: http://localhost:${PORT}/api/payment-npp`);
   console.log(`📡 CORS enabled for all origins`);
   console.log(`🛡️  Security headers enabled (Helmet)`);
 });

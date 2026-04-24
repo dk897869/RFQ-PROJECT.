@@ -1,16 +1,5 @@
 const mongoose = require('mongoose');
 
-const prItemSchema = new mongoose.Schema({
-  costCenter: { type: String },
-  supplierName: { type: String },
-  partCode: { type: String },
-  partDescription: { type: String },
-  specification: { type: String },
-  uom: { type: String },
-  qty: { type: Number, default: 0 },
-  unitPrice: { type: Number, default: 0 }
-});
-
 const stakeholderSchema = new mongoose.Schema({
   line: { type: String, enum: ['Parallel', 'Sequential'], default: 'Sequential' },
   managerName: { type: String },
@@ -27,7 +16,13 @@ const attachmentSchema = new mongoose.Schema({
   remark: { type: String }
 });
 
-const prNppSchema = new mongoose.Schema({
+const invoiceSchema = new mongoose.Schema({
+  invoiceNo: { type: String },
+  invoiceDate: { type: String },
+  invoiceValue: { type: Number, default: 0 }
+});
+
+const paymentNppSchema = new mongoose.Schema({
   requesterName: { type: String, required: true },
   department: { type: String },
   emailId: { type: String },
@@ -40,15 +35,26 @@ const prNppSchema = new mongoose.Schema({
   amount: { type: Number, default: 0 },
   remarks: { type: String },
   priority: { type: String, enum: ['H', 'M', 'L'], default: 'M' },
-  items: [prItemSchema],
+  designation: { type: String },
+  paymentDueTo: { type: String },
+  level: { type: String },
+  paymentTo: { type: String },
+  expenseType: { type: String },
+  expenseAmount: { type: String },
+  balanceForPayment: { type: String },
+  deduction: { type: String },
+  bankDetails: { type: String },
+  sapName: { type: String },
+  sapCode: { type: String },
+  invoices: [invoiceSchema],
   stakeholders: [stakeholderSchema],
   ccList: [{ type: String }],
   attachments: [attachmentSchema],
-  source: { type: String, default: 'PR-REQUEST-NPP' },
+  source: { type: String, default: 'PAYMENT-ADVISE-NPP' },
   status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'In-Process'], default: 'Pending' },
   approvedAt: { type: Date },
   rejectedAt: { type: Date },
   rejectionComments: { type: String }
 }, { timestamps: true });
 
-module.exports = mongoose.model('PrNpp', prNppSchema);
+module.exports = mongoose.model('PaymentNpp', paymentNppSchema);

@@ -1,12 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const { verifyToken } = require('../middlewares/auth');
-const c = require('../controllers/prNpp.controller');
+const {
+  createPrNpp,
+  listPrNpp,
+  getPrNpp,
+  updatePrNpp,
+  deletePrNpp,
+  approvePrNpp,
+  rejectPrNpp
+} = require('../controllers/prNpp.controller');
 
-router.post('/', verifyToken, c.createPrNpp);
-router.get('/', verifyToken, c.listPrNpp);
-router.get('/:id', verifyToken, c.getPrNpp);
-router.patch('/:id/approve', verifyToken, c.approvePrNpp);
-router.patch('/:id/reject', verifyToken, c.rejectPrNpp);
+router.use(verifyToken);
+
+router.post('/', createPrNpp);
+router.get('/', listPrNpp);
+router.get('/:id', getPrNpp);
+router.put('/:id', updatePrNpp);
+router.delete('/:id', deletePrNpp);
+router.patch('/:id/approve', approvePrNpp);
+router.patch('/:id/reject', rejectPrNpp);
 
 module.exports = router;
