@@ -1,16 +1,107 @@
 const PrNpp = require('../models/prNpp.model');
+const { sendMail } = require('../services/mail.service');
+const { generateBeautifulPDF } = require('../services/pdf.service');
+
+// Send PR NPP Created Email
+const sendPRNppCreatedEmail = async (prData) => {
+  const subject = `📋 New PR Request: ${prData.titleOfActivity || 'PR Request'}`;
+  
+  console.log(`📧 Sending PR NPP Created Email to: ${prData.emailId}`);
+  if (prData.ccList && prData.ccList.length > 0) {
+    console.log(`📧 CC recipients: ${prData.ccList.join(', ')}`);
+  }
+  
+  let pdfBuffer = null;
+  try {
+    pdfBuffer = await generateBeautifulPDF(prData);
+  } catch (pdfErr) {
+    console.error('PDF generation error:', pdfErr.message);
+  }
+  
+  return await sendMail({
+    to: prData.emailId,
+    cc: prData.ccList || [],
+    subject: subject,
+    prRequestData: prData,
+    action: 'created',
+    actor: null,
+    nextApprover: null,
+    attachments: pdfBuffer ? [{
+      filename: `PR_${prData._id || Date.now()}.pdf`,
+      content: pdfBuffer,
+      contentType: 'application/pdf'
+    }] : []
+  });
+};
+
+// Send PR NPP Approved Email
+const sendPRNppApprovedEmail = async (prData, approver) => {
+  const subject = `✅ PR Request Approved: ${prData.titleOfActivity || 'PR Request'}`;
+  
+  let pdfBuffer = null;
+  try {
+    pdfBuffer = await generateBeautifulPDF(prData);
+  } catch (pdfErr) {
+    console.error('PDF generation error:', pdfErr.message);
+  }
+  
+  return await sendMail({
+    to: prData.emailId,
+    cc: prData.ccList || [],
+    subject: subject,
+    prRequestData: prData,
+    action: 'approved',
+    actor: approver,
+    nextApprover: null,
+    attachments: pdfBuffer ? [{
+      filename: `PR_${prData._id || Date.now()}.pdf`,
+      content: pdfBuffer,
+      contentType: 'application/pdf'
+    }] : []
+  });
+};
+
+// Send PR NPP Rejected Email
+const sendPRNppRejectedEmail = async (prData, approver) => {
+  const subject = `❌ PR Request Rejected: ${prData.titleOfActivity || 'PR Request'}`;
+  
+  let pdfBuffer = null;
+  try {
+    pdfBuffer = await generateBeautifulPDF(prData);
+  } catch (pdfErr) {
+    console.error('PDF generation error:', pdfErr.message);
+  }
+  
+  return await sendMail({
+    to: prData.emailId,
+    cc: prData.ccList || [],
+    subject: subject,
+    prRequestData: prData,
+    action: 'rejected',
+    actor: approver,
+    nextApprover: null,
+    attachments: pdfBuffer ? [{
+      filename: `PR_${prData._id || Date.now()}.pdf`,
+      content: pdfBuffer,
+      contentType: 'application/pdf'
+    }] : []
+  });
+};
 
 // Create PR NPP
-exports.createPrNpp = async (req, res) => {
+const createPrNpp = async (req, res) => {
   try {
     console.log("📥 Received PR NPP data:", JSON.stringify(req.body, null, 2));
     
     const {
       requesterName, department, emailId, requestDate, contactNo, organization,
       titleOfActivity, purposeAndObjective, vendor, amount, remarks, priority,
-      items, stakeholders, ccList, attachments,
-      source, status
+      items, stakeholders, ccList, attachments, source, status
     } = req.body;
+
+    if (!requesterName) {
+      return res.status(400).json({ success: false, message: "Requester name is required" });
+    }
 
     const newPr = new PrNpp({
       requesterName,
@@ -36,6 +127,13 @@ exports.createPrNpp = async (req, res) => {
     const savedPr = await newPr.save();
     console.log("✅ PR NPP saved successfully:", savedPr._id);
 
+    try {
+      await sendPRNppCreatedEmail(savedPr);
+      console.log("📧 PR NPP email sent successfully");
+    } catch (emailErr) {
+      console.error('⚠️ Email sending error:', emailErr.message);
+    }
+
     res.status(201).json({
       success: true,
       message: 'PR NPP created successfully',
@@ -48,7 +146,7 @@ exports.createPrNpp = async (req, res) => {
 };
 
 // Get all PR NPP
-exports.listPrNpp = async (req, res) => {
+const listPrNpp = async (req, res) => {
   try {
     const rows = await PrNpp.find().sort({ createdAt: -1 });
     res.json({ success: true, data: rows });
@@ -57,8 +155,8 @@ exports.listPrNpp = async (req, res) => {
   }
 };
 
-// Get single PR NPP by ID
-exports.getPrNpp = async (req, res) => {
+// Get single PR NPP
+const getPrNpp = async (req, res) => {
   try {
     const row = await PrNpp.findById(req.params.id);
     if (!row) {
@@ -71,7 +169,7 @@ exports.getPrNpp = async (req, res) => {
 };
 
 // Update PR NPP
-exports.updatePrNpp = async (req, res) => {
+const updatePrNpp = async (req, res) => {
   try {
     const updated = await PrNpp.findByIdAndUpdate(
       req.params.id,
@@ -88,7 +186,7 @@ exports.updatePrNpp = async (req, res) => {
 };
 
 // Delete PR NPP
-exports.deletePrNpp = async (req, res) => {
+const deletePrNpp = async (req, res) => {
   try {
     const deleted = await PrNpp.findByIdAndDelete(req.params.id);
     if (!deleted) {
@@ -101,10 +199,11 @@ exports.deletePrNpp = async (req, res) => {
 };
 
 // Approve PR NPP
-exports.approvePrNpp = async (req, res) => {
+const approvePrNpp = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    const userName = req.user?.name || 'Approver';
     
     const pr = await PrNpp.findById(id);
     if (!pr) {
@@ -118,7 +217,6 @@ exports.approvePrNpp = async (req, res) => {
         pendingApprover.remarks = comments;
         pendingApprover.dateTime = new Date().toISOString();
       }
-      
       const remainingPending = pr.stakeholders.filter(s => s.status === 'Pending');
       pr.status = remainingPending.length === 0 ? 'Approved' : 'In-Process';
     } else {
@@ -126,7 +224,15 @@ exports.approvePrNpp = async (req, res) => {
     }
     
     pr.approvedAt = new Date();
+    pr.approvedBy = userName;
+    pr.approvalComments = comments;
     await pr.save();
+    
+    try {
+      await sendPRNppApprovedEmail(pr, { name: userName, remarks: comments });
+    } catch (emailErr) {
+      console.error('Approval email error:', emailErr.message);
+    }
     
     res.json({ success: true, message: "PR NPP approved", data: pr });
   } catch (err) {
@@ -135,10 +241,11 @@ exports.approvePrNpp = async (req, res) => {
 };
 
 // Reject PR NPP
-exports.rejectPrNpp = async (req, res) => {
+const rejectPrNpp = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    const userName = req.user?.name || 'Rejecter';
     
     const pr = await PrNpp.findById(id);
     if (!pr) {
@@ -156,11 +263,28 @@ exports.rejectPrNpp = async (req, res) => {
     
     pr.status = 'Rejected';
     pr.rejectedAt = new Date();
+    pr.rejectedBy = userName;
     pr.rejectionComments = comments;
     await pr.save();
+    
+    try {
+      await sendPRNppRejectedEmail(pr, { name: userName, remarks: comments });
+    } catch (emailErr) {
+      console.error('Rejection email error:', emailErr.message);
+    }
     
     res.json({ success: true, message: "PR NPP rejected", data: pr });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
+};
+
+module.exports = {
+  createPrNpp,
+  listPrNpp,
+  getPrNpp,
+  updatePrNpp,
+  deletePrNpp,
+  approvePrNpp,
+  rejectPrNpp
 };

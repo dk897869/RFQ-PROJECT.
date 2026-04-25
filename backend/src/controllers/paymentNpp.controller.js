@@ -1,71 +1,117 @@
 const PaymentNpp = require('../models/paymentNpp.model');
+const { sendMail } = require('../services/mail.service');
+const { generateBeautifulPDF } = require('../services/pdf.service');
+
+// Send Payment Advice Created Email
+const sendPaymentAdviceCreatedEmail = async (paymentData) => {
+  const subject = `📋 New Payment Advice: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'}`;
+  
+  console.log(`📧 Sending Payment Advice Email to: ${paymentData.emailId}`);
+  if (paymentData.ccList && paymentData.ccList.length > 0) {
+    console.log(`📧 CC recipients: ${paymentData.ccList.join(', ')}`);
+  }
+  
+  let pdfBuffer = null;
+  try {
+    pdfBuffer = await generateBeautifulPDF(paymentData);
+  } catch (pdfErr) {
+    console.error('PDF generation error:', pdfErr.message);
+  }
+  
+  return await sendMail({
+    to: paymentData.emailId,
+    cc: paymentData.ccList || [],
+    subject: subject,
+    paymentRequestData: paymentData,
+    action: 'created',
+    actor: null,
+    nextApprover: null,
+    attachments: pdfBuffer ? [{
+      filename: `Payment_${paymentData._id || Date.now()}.pdf`,
+      content: pdfBuffer,
+      contentType: 'application/pdf'
+    }] : []
+  });
+};
+
+// Send Payment Advice Approved Email
+const sendPaymentAdviceApprovedEmail = async (paymentData, approver) => {
+  const subject = `✅ Payment Advice Approved: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'}`;
+  
+  let pdfBuffer = null;
+  try {
+    pdfBuffer = await generateBeautifulPDF(paymentData);
+  } catch (pdfErr) {
+    console.error('PDF generation error:', pdfErr.message);
+  }
+  
+  return await sendMail({
+    to: paymentData.emailId,
+    cc: paymentData.ccList || [],
+    subject: subject,
+    paymentRequestData: paymentData,
+    action: 'approved',
+    actor: approver,
+    nextApprover: null,
+    attachments: pdfBuffer ? [{
+      filename: `Payment_${paymentData._id || Date.now()}.pdf`,
+      content: pdfBuffer,
+      contentType: 'application/pdf'
+    }] : []
+  });
+};
+
+// Send Payment Advice Rejected Email
+const sendPaymentAdviceRejectedEmail = async (paymentData, approver) => {
+  const subject = `❌ Payment Advice Rejected: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'}`;
+  
+  let pdfBuffer = null;
+  try {
+    pdfBuffer = await generateBeautifulPDF(paymentData);
+  } catch (pdfErr) {
+    console.error('PDF generation error:', pdfErr.message);
+  }
+  
+  return await sendMail({
+    to: paymentData.emailId,
+    cc: paymentData.ccList || [],
+    subject: subject,
+    paymentRequestData: paymentData,
+    action: 'rejected',
+    actor: approver,
+    nextApprover: null,
+    attachments: pdfBuffer ? [{
+      filename: `Payment_${paymentData._id || Date.now()}.pdf`,
+      content: pdfBuffer,
+      contentType: 'application/pdf'
+    }] : []
+  });
+};
 
 // Create Payment NPP
-exports.createPaymentNpp = async (req, res) => {
+const createPaymentNpp = async (req, res) => {
   try {
     console.log("📥 Received Payment NPP data:", JSON.stringify(req.body, null, 2));
     
     const {
-      requesterName,
-      department,
-      emailId,
-      requestDate,
-      contactNo,
-      organization,
-      titleOfActivity,
-      purposeAndObjective,
-      vendor,
-      amount,
-      remarks,
-      priority,
-      designation,
-      paymentDueTo,
-      level,
-      paymentTo,
-      expenseType,
-      expenseAmount,
-      balanceForPayment,
-      deduction,
-      bankDetails,
-      sapName,
-      sapCode,
-      invoices,
-      stakeholders,
-      ccList,
-      attachments,
-      source,
-      status
+      requesterName, department, emailId, requestDate, contactNo, organization,
+      titleOfActivity, purposeAndObjective, vendor, amount, remarks, priority,
+      designation, paymentDueTo, level, paymentTo, expenseType, expenseAmount,
+      balanceForPayment, deduction, bankDetails, sapName, sapCode,
+      invoices, stakeholders, ccList, attachments, source, status
     } = req.body;
 
-    // Validation
     if (!requesterName) {
       return res.status(400).json({ success: false, message: "Requester name is required" });
     }
 
     const newPayment = new PaymentNpp({
-      requesterName,
-      department,
-      emailId,
+      requesterName, department, emailId,
       requestDate: requestDate || new Date().toISOString().split('T')[0],
-      contactNo,
-      organization: organization || 'Radiant Appliances',
-      titleOfActivity,
-      purposeAndObjective,
-      vendor,
-      amount: amount || 0,
-      remarks,
-      priority: priority || 'M',
-      designation,
-      paymentDueTo,
-      level,
-      paymentTo,
-      expenseType,
-      expenseAmount,
-      balanceForPayment,
-      deduction,
-      bankDetails,
-      sapName,
-      sapCode,
+      contactNo, organization: organization || 'Radiant Appliances',
+      titleOfActivity, purposeAndObjective, vendor, amount: amount || 0, remarks,
+      priority: priority || 'M', designation, paymentDueTo, level, paymentTo,
+      expenseType, expenseAmount, balanceForPayment, deduction, bankDetails, sapName, sapCode,
       invoices: invoices || [],
       stakeholders: stakeholders || [],
       ccList: ccList || [],
@@ -77,9 +123,16 @@ exports.createPaymentNpp = async (req, res) => {
     const savedPayment = await newPayment.save();
     console.log("✅ Payment NPP saved successfully:", savedPayment._id);
 
+    try {
+      await sendPaymentAdviceCreatedEmail(savedPayment);
+      console.log("📧 Payment advice email sent successfully");
+    } catch (emailErr) {
+      console.error('⚠️ Email sending error:', emailErr.message);
+    }
+
     res.status(201).json({
       success: true,
-      message: 'Payment NPP created successfully',
+      message: 'Payment Advice created successfully',
       data: savedPayment
     });
   } catch (err) {
@@ -89,7 +142,7 @@ exports.createPaymentNpp = async (req, res) => {
 };
 
 // Get all Payment NPP
-exports.listPaymentNpp = async (req, res) => {
+const listPaymentNpp = async (req, res) => {
   try {
     const rows = await PaymentNpp.find().sort({ createdAt: -1 });
     res.json({ success: true, data: rows });
@@ -98,12 +151,12 @@ exports.listPaymentNpp = async (req, res) => {
   }
 };
 
-// Get single Payment NPP by ID
-exports.getPaymentNpp = async (req, res) => {
+// Get single Payment NPP
+const getPaymentNpp = async (req, res) => {
   try {
     const row = await PaymentNpp.findById(req.params.id);
     if (!row) {
-      return res.status(404).json({ success: false, message: "Payment NPP not found" });
+      return res.status(404).json({ success: false, message: "Payment advice not found" });
     }
     res.json({ success: true, data: row });
   } catch (err) {
@@ -112,7 +165,7 @@ exports.getPaymentNpp = async (req, res) => {
 };
 
 // Update Payment NPP
-exports.updatePaymentNpp = async (req, res) => {
+const updatePaymentNpp = async (req, res) => {
   try {
     const updated = await PaymentNpp.findByIdAndUpdate(
       req.params.id,
@@ -120,7 +173,7 @@ exports.updatePaymentNpp = async (req, res) => {
       { new: true, runValidators: true }
     );
     if (!updated) {
-      return res.status(404).json({ success: false, message: "Payment NPP not found" });
+      return res.status(404).json({ success: false, message: "Payment advice not found" });
     }
     res.json({ success: true, data: updated });
   } catch (err) {
@@ -129,30 +182,30 @@ exports.updatePaymentNpp = async (req, res) => {
 };
 
 // Delete Payment NPP
-exports.deletePaymentNpp = async (req, res) => {
+const deletePaymentNpp = async (req, res) => {
   try {
     const deleted = await PaymentNpp.findByIdAndDelete(req.params.id);
     if (!deleted) {
-      return res.status(404).json({ success: false, message: "Payment NPP not found" });
+      return res.status(404).json({ success: false, message: "Payment advice not found" });
     }
-    res.json({ success: true, message: "Payment NPP deleted successfully" });
+    res.json({ success: true, message: "Payment advice deleted successfully" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
 // Approve Payment NPP
-exports.approvePaymentNpp = async (req, res) => {
+const approvePaymentNpp = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    const userName = req.user?.name || 'Approver';
     
     const payment = await PaymentNpp.findById(id);
     if (!payment) {
-      return res.status(404).json({ success: false, message: "Payment NPP not found" });
+      return res.status(404).json({ success: false, message: "Payment advice not found" });
     }
     
-    // Update stakeholder status
     if (payment.stakeholders && payment.stakeholders.length > 0) {
       const pendingApprover = payment.stakeholders.find(s => s.status === 'Pending');
       if (pendingApprover) {
@@ -160,7 +213,6 @@ exports.approvePaymentNpp = async (req, res) => {
         pendingApprover.remarks = comments;
         pendingApprover.dateTime = new Date().toISOString();
       }
-      
       const remainingPending = payment.stakeholders.filter(s => s.status === 'Pending');
       payment.status = remainingPending.length === 0 ? 'Approved' : 'In-Process';
     } else {
@@ -168,23 +220,32 @@ exports.approvePaymentNpp = async (req, res) => {
     }
     
     payment.approvedAt = new Date();
+    payment.approvedBy = userName;
+    payment.approvalComments = comments;
     await payment.save();
     
-    res.json({ success: true, message: "Payment NPP approved", data: payment });
+    try {
+      await sendPaymentAdviceApprovedEmail(payment, { name: userName, remarks: comments });
+    } catch (emailErr) {
+      console.error('Approval email error:', emailErr.message);
+    }
+    
+    res.json({ success: true, message: "Payment advice approved", data: payment });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
 // Reject Payment NPP
-exports.rejectPaymentNpp = async (req, res) => {
+const rejectPaymentNpp = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    const userName = req.user?.name || 'Rejecter';
     
     const payment = await PaymentNpp.findById(id);
     if (!payment) {
-      return res.status(404).json({ success: false, message: "Payment NPP not found" });
+      return res.status(404).json({ success: false, message: "Payment advice not found" });
     }
     
     if (payment.stakeholders && payment.stakeholders.length > 0) {
@@ -198,11 +259,28 @@ exports.rejectPaymentNpp = async (req, res) => {
     
     payment.status = 'Rejected';
     payment.rejectedAt = new Date();
+    payment.rejectedBy = userName;
     payment.rejectionComments = comments;
     await payment.save();
     
-    res.json({ success: true, message: "Payment NPP rejected", data: payment });
+    try {
+      await sendPaymentAdviceRejectedEmail(payment, { name: userName, remarks: comments });
+    } catch (emailErr) {
+      console.error('Rejection email error:', emailErr.message);
+    }
+    
+    res.json({ success: true, message: "Payment advice rejected", data: payment });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
+};
+
+module.exports = {
+  createPaymentNpp,
+  listPaymentNpp,
+  getPaymentNpp,
+  updatePaymentNpp,
+  deletePaymentNpp,
+  approvePaymentNpp,
+  rejectPaymentNpp
 };

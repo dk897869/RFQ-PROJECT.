@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { verifyToken } = require('../middlewares/auth');
+
+// Import all controller functions
 const {
   createPoNpp,
   listPoNpp,
@@ -11,13 +13,17 @@ const {
   rejectPoNpp
 } = require('../controllers/poNpp.controller');
 
+// Apply authentication to all routes
 router.use(verifyToken);
 
+// CRUD Routes
 router.post('/', createPoNpp);
 router.get('/', listPoNpp);
 router.get('/:id', getPoNpp);
 router.put('/:id', updatePoNpp);
 router.delete('/:id', deletePoNpp);
+
+// Approval Routes
 router.patch('/:id/approve', approvePoNpp);
 router.patch('/:id/reject', rejectPoNpp);
 
