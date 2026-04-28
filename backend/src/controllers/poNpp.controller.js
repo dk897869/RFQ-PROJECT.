@@ -1,93 +1,97 @@
+// backend/src/controllers/poNpp.controller.js
+
 const PoNpp = require('../models/poNpp.model');
 const { sendMail } = require('../services/mail.service');
-const { generateBeautifulPDF } = require('../services/pdf.service');
+const { generatePOSerial } = require('../services/serialNumber.service');
 
-// Send PO NPP Created Email
-const sendPONppCreatedEmail = async (poData) => {
-  const subject = `📋 New PO Created: ${poData.orderNo || poData.titleOfActivity || 'Purchase Order'}`;
+// Send PO Created Email
+const sendPOCreatedEmail = async (poData) => {
+  const subject = `📋 New PO Created: ${poData.orderNo || poData.titleOfActivity || 'Purchase Order'} (${poData.uniqueSerialNo})`;
   
-  console.log(`📧 Sending PO NPP Created Email to: ${poData.emailId}`);
-  if (poData.ccList && poData.ccList.length > 0) {
-    console.log(`📧 CC recipients: ${poData.ccList.join(', ')}`);
-  }
+  console.log(`📧 Sending PO creation email to: ${poData.emailId}`);
+  console.log(`📧 CC recipients: ${poData.ccList?.join(', ') || 'None'}`);
+  console.log(`📧 Vendor email: ${poData.vendorEmail || 'None'}`);
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(poData);
-    console.log('📄 PDF generated for PO');
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  const result = await sendMail({
+  // Send to requester with CC
+  await sendMail({
     to: poData.emailId,
     cc: poData.ccList || [],
     subject: subject,
     poRequestData: poData,
     action: 'created',
     actor: null,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `PO_${poData.orderNo || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: poData.stakeholders?.[0] || null
   });
   
-  return result;
-};
-
-// Send PO NPP Approved Email
-const sendPONppApprovedEmail = async (poData, approver) => {
-  const subject = `✅ PO Approved: ${poData.orderNo || poData.titleOfActivity || 'Purchase Order'}`;
-  
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(poData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
+  // Send to vendor if email exists
+  if (poData.vendorEmail) {
+    await sendMail({
+      to: poData.vendorEmail,
+      subject: `New Purchase Order: ${poData.orderNo} (${poData.uniqueSerialNo})`,
+      poRequestData: poData,
+      action: 'created',
+      actor: null,
+      nextApprover: null
+    });
+    console.log(`📧 PO email sent to vendor: ${poData.vendorEmail}`);
   }
   
-  return await sendMail({
+  // Send to all stakeholders (approvers)
+  if (poData.stakeholders && poData.stakeholders.length > 0) {
+    for (const approver of poData.stakeholders) {
+      if (approver.email && approver.email !== poData.emailId) {
+        await sendMail({
+          to: approver.email,
+          subject: `🔔 Approval Required: ${poData.orderNo || 'Purchase Order'} (${poData.uniqueSerialNo})`,
+          poRequestData: poData,
+          action: 'approval_needed',
+          actor: { name: poData.purchaser || poData.requesterName },
+          nextApprover: null
+        });
+        console.log(`📧 Approval request sent to: ${approver.email}`);
+      }
+    }
+  }
+};
+
+// Send PO Approved Email
+const sendPOApprovedEmail = async (poData, approver) => {
+  const subject = `✅ PO Approved: ${poData.orderNo || poData.titleOfActivity || 'Purchase Order'} (${poData.uniqueSerialNo})`;
+  
+  await sendMail({
     to: poData.emailId,
     cc: poData.ccList || [],
     subject: subject,
     poRequestData: poData,
     action: 'approved',
     actor: approver,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `PO_${poData.orderNo || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: null
   });
+  
+  if (poData.vendorEmail) {
+    await sendMail({
+      to: poData.vendorEmail,
+      subject: `Purchase Order Approved: ${poData.orderNo} (${poData.uniqueSerialNo})`,
+      poRequestData: poData,
+      action: 'approved',
+      actor: approver,
+      nextApprover: null
+    });
+  }
 };
 
-// Send PO NPP Rejected Email
-const sendPONppRejectedEmail = async (poData, approver) => {
-  const subject = `❌ PO Rejected: ${poData.orderNo || poData.titleOfActivity || 'Purchase Order'}`;
+// Send PO Rejected Email
+const sendPORejectedEmail = async (poData, approver) => {
+  const subject = `❌ PO Rejected: ${poData.orderNo || poData.titleOfActivity || 'Purchase Order'} (${poData.uniqueSerialNo})`;
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(poData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  return await sendMail({
+  await sendMail({
     to: poData.emailId,
     cc: poData.ccList || [],
     subject: subject,
     poRequestData: poData,
     action: 'rejected',
     actor: approver,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `PO_${poData.orderNo || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: null
   });
 };
 
@@ -110,7 +114,12 @@ const createPoNpp = async (req, res) => {
       return res.status(400).json({ success: false, message: "Requester name is required" });
     }
 
+    // Generate unique serial number
+    const uniqueSerialNo = generatePOSerial();
+    console.log(`📋 Generated PO Serial Number: ${uniqueSerialNo}`);
+
     const newPo = new PoNpp({
+      uniqueSerialNo,
       requesterName,
       department,
       emailId,
@@ -140,10 +149,12 @@ const createPoNpp = async (req, res) => {
 
     const savedPo = await newPo.save();
     console.log("✅ PO NPP saved successfully:", savedPo._id);
+    console.log(`📋 PO Serial Number: ${savedPo.uniqueSerialNo}`);
 
+    // Send emails
     try {
-      await sendPONppCreatedEmail(savedPo);
-      console.log("📧 PO NPP email sent successfully");
+      await sendPOCreatedEmail(savedPo);
+      console.log("📧 PO creation emails sent successfully");
     } catch (emailErr) {
       console.error('⚠️ Email sending error:', emailErr.message);
     }
@@ -151,6 +162,7 @@ const createPoNpp = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'PO NPP created successfully',
+      serialNumber: savedPo.uniqueSerialNo,
       data: savedPo
     });
   } catch (err) {
@@ -243,7 +255,7 @@ const approvePoNpp = async (req, res) => {
     await po.save();
     
     try {
-      await sendPONppApprovedEmail(po, { name: userName, remarks: comments });
+      await sendPOApprovedEmail(po, { name: userName, remarks: comments });
       console.log("📧 Approval email sent");
     } catch (emailErr) {
       console.error('Approval email error:', emailErr.message);
@@ -283,7 +295,7 @@ const rejectPoNpp = async (req, res) => {
     await po.save();
     
     try {
-      await sendPONppRejectedEmail(po, { name: userName, remarks: comments });
+      await sendPORejectedEmail(po, { name: userName, remarks: comments });
       console.log("📧 Rejection email sent");
     } catch (emailErr) {
       console.error('Rejection email error:', emailErr.message);

@@ -3,24 +3,44 @@ require("dotenv").config();  // ✅ MOVED TO THE TOP - Must be first!
 const express = require("express");
 const path = require("path");
 const cors = require("cors");
-const helmet = require("helmet");   // Added for security (optional but recommended)
-const multer = require("multer");   // Added for file uploads
+const helmet = require("helmet");
+const multer = require("multer");
 const fs = require("fs");
 
 const connectDB = require("./config/db");
 
-// ROUTES
-const authRoutes = require("./routes/auth.routes");
-const dashboardRoutes = require("./routes/dashboard.routes");
-const requestRoutes = require("./routes/request.routes");
-const vendorRoutes = require("./routes/vendor.routes");
-const partRoutes = require("./routes/part.routes");
-const userRoutes = require("./routes/user.routes");
+// Helper function to safely require routes - prevents crashes if files don't exist
+const safeRequire = (routePath, defaultValue) => {
+  try {
+    return require(routePath);
+  } catch (err) {
+    console.warn(`⚠️ Could not load ${routePath}: ${err.message}`);
+    return defaultValue || ((req, res) => res.status(501).json({ 
+      success: false, 
+      message: `${routePath} API not available yet`
+    }));
+  }
+};
 
-// ✅ NEW NPP PROCUREMENT ROUTES
-const paymentNppRoutes = require("./routes/paymentNpp.routes");
-const poNppRoutes = require("./routes/poNpp.routes");
-const prNppRoutes = require("./routes/prNpp.routes");
+// ROUTES - using safe require to prevent crashes
+const authRoutes = safeRequire("./routes/auth.routes");
+const dashboardRoutes = safeRequire("./routes/dashboard.routes");
+const requestRoutes = safeRequire("./routes/request.routes");
+const vendorRoutes = safeRequire("./routes/vendor.routes");
+const partRoutes = safeRequire("./routes/part.routes");
+const userRoutes = safeRequire("./routes/user.routes");
+
+// ✅ NPP PROCUREMENT ROUTES
+const paymentNppRoutes = safeRequire("./routes/paymentNpp.routes");
+const poNppRoutes = safeRequire("./routes/poNpp.routes");
+const prNppRoutes = safeRequire("./routes/prNpp.routes");
+const rfqRoutes = safeRequire("./routes/rfq.routes");
+
+// ✅ NEW API ROUTES - will not crash if missing
+const orderHistoryRoutes = safeRequire("./routes/orderHistory.routes");
+const reportRoutes = safeRequire("./routes/report.routes");
+const approvalRoutes = safeRequire("./routes/approval.routes");
+const serialNumberRoutes = safeRequire("./routes/serialNumber.routes");
 
 const app = express();
 
@@ -28,7 +48,6 @@ const app = express();
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadDir = path.join(__dirname, "..", "uploads", "avatars");
-    // Create directory if it doesn't exist
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -43,7 +62,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB limit
+  limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -57,26 +76,20 @@ const upload = multer({
 connectDB();
 
 /* ================= MIDDLEWARE ================= */
-
-// Security headers
 app.use(helmet());
-
-// CORS configuration - More secure than origin: "*"
 app.use(cors({
-  origin: "*",                    // Change to specific frontend URL in production
+  origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "Accept"],
   credentials: true,
-  maxAge: 86400                   // Cache preflight for 24 hours
+  maxAge: 86400
 }));
 
-// Body parsers - MUST be before routes
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
-// Request logger (for development)
 if (process.env.NODE_ENV !== "production") {
   app.use((req, res, next) => {
     console.log(`📌 ${req.method} ${req.url}`);
@@ -104,9 +117,8 @@ app.get('/health', (req, res) => {
   });
 });
 
-/* ================= ADDITIONAL AUTH ENDPOINTS (FIX 404 ERRORS) ================= */
+/* ================= AUTH ENDPOINTS ================= */
 
-// ✅ FIX: GET /api/auth/profile endpoint
 app.get('/api/auth/profile', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -114,7 +126,6 @@ app.get('/api/auth/profile', async (req, res) => {
       return res.status(401).json({ success: false, message: 'No token provided' });
     }
     
-    // Forward to auth/me endpoint or implement user fetch
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const User = require('./models/user.model');
@@ -130,7 +141,6 @@ app.get('/api/auth/profile', async (req, res) => {
   }
 });
 
-// ✅ FIX: PATCH /api/auth/profile endpoint
 app.patch('/api/auth/profile', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -163,7 +173,6 @@ app.patch('/api/auth/profile', async (req, res) => {
   }
 });
 
-// ✅ FIX: PUT /api/auth/profile endpoint
 app.put('/api/auth/profile', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -191,7 +200,6 @@ app.put('/api/auth/profile', async (req, res) => {
   }
 });
 
-// ✅ FIX: POST /api/auth/change-password endpoint
 app.post('/api/auth/change-password', async (req, res) => {
   try {
     const { currentPassword, newPassword, confirmPassword } = req.body;
@@ -229,7 +237,6 @@ app.post('/api/auth/change-password', async (req, res) => {
   }
 });
 
-// ✅ FIX: POST /api/auth/upload-avatar endpoint
 app.post('/api/auth/upload-avatar', upload.single('avatar'), async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -266,7 +273,6 @@ app.post('/api/auth/upload-avatar', upload.single('avatar'), async (req, res) =>
   }
 });
 
-// ✅ FIX: DELETE /api/auth/avatar endpoint
 app.delete('/api/auth/avatar', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -294,7 +300,6 @@ app.delete('/api/auth/avatar', async (req, res) => {
   }
 });
 
-// ✅ FIX: POST /api/auth/remove-avatar endpoint (alternative)
 app.post('/api/auth/remove-avatar', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -322,7 +327,6 @@ app.post('/api/auth/remove-avatar', async (req, res) => {
   }
 });
 
-// ✅ FIX: POST /api/auth/update-profile endpoint
 app.post('/api/auth/update-profile', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -350,7 +354,6 @@ app.post('/api/auth/update-profile', async (req, res) => {
   }
 });
 
-// ✅ FIX: PATCH /api/auth/password endpoint
 app.patch('/api/auth/password', async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -384,7 +387,6 @@ app.patch('/api/auth/password', async (req, res) => {
   }
 });
 
-// ✅ FIX: PUT /api/auth/password endpoint
 app.put('/api/auth/password', async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -420,26 +422,33 @@ app.put('/api/auth/password', async (req, res) => {
 
 /* ================= ROUTES ================= */
 
-// Register all routes
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/request", requestRoutes);
 app.use("/api/vendor", vendorRoutes);
-app.use("/api/rfq", require('./routes/rfq.routes'));
+app.use("/api/rfq", rfqRoutes);
 
-// ✅ NEW NPP PROCUREMENT ROUTES
+// ✅ NPP PROCUREMENT ROUTES
 app.use("/api/pr-npp", prNppRoutes);
 app.use("/api/po-npp", poNppRoutes);
 app.use("/api/payment-npp", paymentNppRoutes);
 
-app.use("/api/otp", require('./routes/otp.routes'));
+// ✅ NEW API ROUTES - will work if files exist, otherwise return 501
+app.use("/api/order-history", orderHistoryRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/approvals", approvalRoutes);
+app.use("/api/serial-number", serialNumberRoutes);
+
+// Optional route - safe require
+const otpRoutes = safeRequire("./routes/otp.routes");
+app.use("/api/otp", otpRoutes);
+
 app.use("/api/part", partRoutes);
 app.use("/api/users", userRoutes);
 
-// ✅ FIX: Added ep-approval alias - prevents /api/ep-approval 404
 app.use('/api/ep-approval', requestRoutes);
 
-// User Rights route with safe loading
+// User rights route - safe require
 try {
   const userRightRoutes = require("./routes/userRight.routes");
   app.use("/api/user-rights", userRightRoutes);
@@ -448,13 +457,28 @@ try {
   console.warn("⚠️ userRight.routes not found or failed to load. Skipping...");
 }
 
-// Health check route (root endpoint)
 app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "API Running Successfully 🚀",
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || "development"
+    environment: process.env.NODE_ENV || "development",
+    availableApis: {
+      auth: "/api/auth",
+      dashboard: "/api/dashboard",
+      epApproval: "/api/ep-approval",
+      request: "/api/request",
+      vendor: "/api/vendor",
+      part: "/api/part",
+      rfq: "/api/rfq",
+      prNpp: "/api/pr-npp",
+      poNpp: "/api/po-npp",
+      paymentNpp: "/api/payment-npp",
+      orderHistory: "/api/order-history",
+      reports: "/api/reports",
+      approvals: "/api/approvals",
+      serialNumber: "/api/serial-number"
+    }
   });
 });
 
@@ -463,7 +487,7 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: `Route ${req.method} ${req.url} not found`,
-    hint: 'Available routes: GET /api/health | POST /api/auth/login | GET /api/auth/me | GET /api/request | GET /api/ep-approval | GET /api/dashboard | GET /health | PATCH /api/auth/profile | POST /api/auth/change-password | POST /api/auth/upload-avatar | DELETE /api/auth/avatar | POST /api/pr-npp | POST /api/po-npp | POST /api/payment-npp'
+    hint: 'Available routes: GET /api/health | POST /api/auth/login | GET /api/auth/me | GET /api/request | GET /api/ep-approval | GET /api/dashboard | GET /health | PATCH /api/auth/profile | POST /api/auth/change-password | POST /api/auth/upload-avatar | DELETE /api/auth/avatar | POST /api/pr-npp | POST /api/po-npp | POST /api/payment-npp | GET /api/order-history | GET /api/reports/generate | GET /api/serial-number/rfq'
   });
 });
 
@@ -501,6 +525,11 @@ app.listen(PORT, () => {
   console.log(`   - PR NPP     : http://localhost:${PORT}/api/pr-npp`);
   console.log(`   - PO NPP     : http://localhost:${PORT}/api/po-npp`);
   console.log(`   - Payment NPP: http://localhost:${PORT}/api/payment-npp`);
+  console.log(`✅ NEW APIs:`);
+  console.log(`   - Order History : http://localhost:${PORT}/api/order-history`);
+  console.log(`   - Reports       : http://localhost:${PORT}/api/reports/generate`);
+  console.log(`   - Approvals     : http://localhost:${PORT}/api/approvals`);
+  console.log(`   - Serial Number : http://localhost:${PORT}/api/serial-number/rfq`);
   console.log(`📡 CORS enabled for all origins`);
   console.log(`🛡️  Security headers enabled (Helmet)`);
 });

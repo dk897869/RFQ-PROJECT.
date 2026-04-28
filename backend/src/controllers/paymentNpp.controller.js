@@ -1,90 +1,72 @@
+// backend/src/controllers/paymentNpp.controller.js
+
 const PaymentNpp = require('../models/paymentNpp.model');
 const { sendMail } = require('../services/mail.service');
-const { generateBeautifulPDF } = require('../services/pdf.service');
+const { generatePaymentSerial } = require('../services/serialNumber.service');
 
-// Send Payment Advice Created Email
-const sendPaymentAdviceCreatedEmail = async (paymentData) => {
-  const subject = `📋 New Payment Advice: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'}`;
+// Send Payment Created Email
+const sendPaymentCreatedEmail = async (paymentData) => {
+  const subject = `📋 New Payment Advice: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'} (${paymentData.uniqueSerialNo})`;
   
-  console.log(`📧 Sending Payment Advice Email to: ${paymentData.emailId}`);
-  if (paymentData.ccList && paymentData.ccList.length > 0) {
-    console.log(`📧 CC recipients: ${paymentData.ccList.join(', ')}`);
-  }
+  console.log(`📧 Sending Payment creation email to: ${paymentData.emailId}`);
+  console.log(`📧 CC recipients: ${paymentData.ccList?.join(', ') || 'None'}`);
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(paymentData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  return await sendMail({
+  // Send to requester with CC
+  await sendMail({
     to: paymentData.emailId,
     cc: paymentData.ccList || [],
     subject: subject,
     paymentRequestData: paymentData,
     action: 'created',
     actor: null,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `Payment_${paymentData._id || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: paymentData.stakeholders?.[0] || null
   });
+  
+  // Send to all stakeholders (approvers)
+  if (paymentData.stakeholders && paymentData.stakeholders.length > 0) {
+    for (const approver of paymentData.stakeholders) {
+      if (approver.email && approver.email !== paymentData.emailId) {
+        await sendMail({
+          to: approver.email,
+          subject: `🔔 Approval Required: ${paymentData.titleOfActivity || 'Payment Request'} (${paymentData.uniqueSerialNo})`,
+          paymentRequestData: paymentData,
+          action: 'approval_needed',
+          actor: { name: paymentData.requesterName },
+          nextApprover: null
+        });
+        console.log(`📧 Approval request sent to: ${approver.email}`);
+      }
+    }
+  }
 };
 
-// Send Payment Advice Approved Email
-const sendPaymentAdviceApprovedEmail = async (paymentData, approver) => {
-  const subject = `✅ Payment Advice Approved: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'}`;
+// Send Payment Approved Email
+const sendPaymentApprovedEmail = async (paymentData, approver) => {
+  const subject = `✅ Payment Advice Approved: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'} (${paymentData.uniqueSerialNo})`;
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(paymentData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  return await sendMail({
+  await sendMail({
     to: paymentData.emailId,
     cc: paymentData.ccList || [],
     subject: subject,
     paymentRequestData: paymentData,
     action: 'approved',
     actor: approver,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `Payment_${paymentData._id || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: null
   });
 };
 
-// Send Payment Advice Rejected Email
-const sendPaymentAdviceRejectedEmail = async (paymentData, approver) => {
-  const subject = `❌ Payment Advice Rejected: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'}`;
+// Send Payment Rejected Email
+const sendPaymentRejectedEmail = async (paymentData, approver) => {
+  const subject = `❌ Payment Advice Rejected: ${paymentData.titleOfActivity || paymentData.paymentTo || 'Payment Request'} (${paymentData.uniqueSerialNo})`;
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(paymentData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  return await sendMail({
+  await sendMail({
     to: paymentData.emailId,
     cc: paymentData.ccList || [],
     subject: subject,
     paymentRequestData: paymentData,
     action: 'rejected',
     actor: approver,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `Payment_${paymentData._id || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: null
   });
 };
 
@@ -95,9 +77,9 @@ const createPaymentNpp = async (req, res) => {
     
     const {
       requesterName, department, emailId, requestDate, contactNo, organization,
-      titleOfActivity, purposeAndObjective, vendor, amount, remarks, priority,
-      designation, paymentDueTo, level, paymentTo, expenseType, expenseAmount,
-      balanceForPayment, deduction, bankDetails, sapName, sapCode,
+      designation, paymentDueTo, level, paymentTo, purposeAndObjective,
+      expenseType, expenseAmount, balanceForPayment, deduction, bankDetails,
+      remarks, sapName, sapCode, titleOfActivity, amount,
       invoices, stakeholders, ccList, attachments, source, status
     } = req.body;
 
@@ -105,13 +87,33 @@ const createPaymentNpp = async (req, res) => {
       return res.status(400).json({ success: false, message: "Requester name is required" });
     }
 
+    // Generate unique serial number
+    const uniqueSerialNo = generatePaymentSerial();
+    console.log(`📋 Generated Payment Serial Number: ${uniqueSerialNo}`);
+
     const newPayment = new PaymentNpp({
-      requesterName, department, emailId,
+      uniqueSerialNo,
+      requesterName,
+      department,
+      emailId,
       requestDate: requestDate || new Date().toISOString().split('T')[0],
-      contactNo, organization: organization || 'Radiant Appliances',
-      titleOfActivity, purposeAndObjective, vendor, amount: amount || 0, remarks,
-      priority: priority || 'M', designation, paymentDueTo, level, paymentTo,
-      expenseType, expenseAmount, balanceForPayment, deduction, bankDetails, sapName, sapCode,
+      contactNo,
+      organization: organization || 'Radiant Appliances',
+      designation,
+      paymentDueTo,
+      level,
+      paymentTo,
+      purposeAndObjective,
+      expenseType,
+      expenseAmount,
+      balanceForPayment,
+      deduction,
+      bankDetails,
+      remarks,
+      sapName,
+      sapCode,
+      titleOfActivity: titleOfActivity || purposeAndObjective?.substring(0, 100) || '',
+      amount: amount || Number(expenseAmount) || 0,
       invoices: invoices || [],
       stakeholders: stakeholders || [],
       ccList: ccList || [],
@@ -122,10 +124,12 @@ const createPaymentNpp = async (req, res) => {
 
     const savedPayment = await newPayment.save();
     console.log("✅ Payment NPP saved successfully:", savedPayment._id);
+    console.log(`📋 Payment Serial Number: ${savedPayment.uniqueSerialNo}`);
 
+    // Send emails
     try {
-      await sendPaymentAdviceCreatedEmail(savedPayment);
-      console.log("📧 Payment advice email sent successfully");
+      await sendPaymentCreatedEmail(savedPayment);
+      console.log("📧 Payment creation emails sent successfully");
     } catch (emailErr) {
       console.error('⚠️ Email sending error:', emailErr.message);
     }
@@ -133,6 +137,7 @@ const createPaymentNpp = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Payment Advice created successfully',
+      serialNumber: savedPayment.uniqueSerialNo,
       data: savedPayment
     });
   } catch (err) {
@@ -225,7 +230,8 @@ const approvePaymentNpp = async (req, res) => {
     await payment.save();
     
     try {
-      await sendPaymentAdviceApprovedEmail(payment, { name: userName, remarks: comments });
+      await sendPaymentApprovedEmail(payment, { name: userName, remarks: comments });
+      console.log("📧 Approval email sent");
     } catch (emailErr) {
       console.error('Approval email error:', emailErr.message);
     }
@@ -264,7 +270,8 @@ const rejectPaymentNpp = async (req, res) => {
     await payment.save();
     
     try {
-      await sendPaymentAdviceRejectedEmail(payment, { name: userName, remarks: comments });
+      await sendPaymentRejectedEmail(payment, { name: userName, remarks: comments });
+      console.log("📧 Rejection email sent");
     } catch (emailErr) {
       console.error('Rejection email error:', emailErr.message);
     }

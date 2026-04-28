@@ -1,90 +1,72 @@
+// backend/src/controllers/prNpp.controller.js
+
 const PrNpp = require('../models/prNpp.model');
 const { sendMail } = require('../services/mail.service');
-const { generateBeautifulPDF } = require('../services/pdf.service');
+const { generatePRSerial } = require('../services/serialNumber.service');
 
-// Send PR NPP Created Email
-const sendPRNppCreatedEmail = async (prData) => {
-  const subject = `📋 New PR Request: ${prData.titleOfActivity || 'PR Request'}`;
+// Send PR Created Email
+const sendPRCreatedEmail = async (prData) => {
+  const subject = `📋 New PR Request Created: ${prData.titleOfActivity || 'PR Request'} (${prData.uniqueSerialNo})`;
   
-  console.log(`📧 Sending PR NPP Created Email to: ${prData.emailId}`);
-  if (prData.ccList && prData.ccList.length > 0) {
-    console.log(`📧 CC recipients: ${prData.ccList.join(', ')}`);
-  }
+  console.log(`📧 Sending PR creation email to: ${prData.emailId}`);
+  console.log(`📧 CC recipients: ${prData.ccList?.join(', ') || 'None'}`);
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(prData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  return await sendMail({
+  // Send to requester with CC
+  await sendMail({
     to: prData.emailId,
     cc: prData.ccList || [],
     subject: subject,
     prRequestData: prData,
     action: 'created',
     actor: null,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `PR_${prData._id || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: prData.stakeholders?.[0] || null
   });
+  
+  // Send to all stakeholders (approvers)
+  if (prData.stakeholders && prData.stakeholders.length > 0) {
+    for (const approver of prData.stakeholders) {
+      if (approver.email && approver.email !== prData.emailId) {
+        await sendMail({
+          to: approver.email,
+          subject: `🔔 Approval Required: ${prData.titleOfActivity || 'PR Request'} (${prData.uniqueSerialNo})`,
+          prRequestData: prData,
+          action: 'approval_needed',
+          actor: { name: prData.requesterName },
+          nextApprover: null
+        });
+        console.log(`📧 Approval request sent to: ${approver.email}`);
+      }
+    }
+  }
 };
 
-// Send PR NPP Approved Email
-const sendPRNppApprovedEmail = async (prData, approver) => {
-  const subject = `✅ PR Request Approved: ${prData.titleOfActivity || 'PR Request'}`;
+// Send PR Approved Email
+const sendPRApprovedEmail = async (prData, approver) => {
+  const subject = `✅ PR Request Approved: ${prData.titleOfActivity || 'PR Request'} (${prData.uniqueSerialNo})`;
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(prData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  return await sendMail({
+  await sendMail({
     to: prData.emailId,
     cc: prData.ccList || [],
     subject: subject,
     prRequestData: prData,
     action: 'approved',
     actor: approver,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `PR_${prData._id || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: null
   });
 };
 
-// Send PR NPP Rejected Email
-const sendPRNppRejectedEmail = async (prData, approver) => {
-  const subject = `❌ PR Request Rejected: ${prData.titleOfActivity || 'PR Request'}`;
+// Send PR Rejected Email
+const sendPRRejectedEmail = async (prData, approver) => {
+  const subject = `❌ PR Request Rejected: ${prData.titleOfActivity || 'PR Request'} (${prData.uniqueSerialNo})`;
   
-  let pdfBuffer = null;
-  try {
-    pdfBuffer = await generateBeautifulPDF(prData);
-  } catch (pdfErr) {
-    console.error('PDF generation error:', pdfErr.message);
-  }
-  
-  return await sendMail({
+  await sendMail({
     to: prData.emailId,
     cc: prData.ccList || [],
     subject: subject,
     prRequestData: prData,
     action: 'rejected',
     actor: approver,
-    nextApprover: null,
-    attachments: pdfBuffer ? [{
-      filename: `PR_${prData._id || Date.now()}.pdf`,
-      content: pdfBuffer,
-      contentType: 'application/pdf'
-    }] : []
+    nextApprover: null
   });
 };
 
@@ -103,7 +85,12 @@ const createPrNpp = async (req, res) => {
       return res.status(400).json({ success: false, message: "Requester name is required" });
     }
 
+    // Generate unique serial number
+    const uniqueSerialNo = generatePRSerial();
+    console.log(`📋 Generated PR Serial Number: ${uniqueSerialNo}`);
+
     const newPr = new PrNpp({
+      uniqueSerialNo,
       requesterName,
       department,
       emailId,
@@ -126,10 +113,12 @@ const createPrNpp = async (req, res) => {
 
     const savedPr = await newPr.save();
     console.log("✅ PR NPP saved successfully:", savedPr._id);
+    console.log(`📋 PR Serial Number: ${savedPr.uniqueSerialNo}`);
 
+    // Send emails
     try {
-      await sendPRNppCreatedEmail(savedPr);
-      console.log("📧 PR NPP email sent successfully");
+      await sendPRCreatedEmail(savedPr);
+      console.log("📧 PR creation emails sent successfully");
     } catch (emailErr) {
       console.error('⚠️ Email sending error:', emailErr.message);
     }
@@ -137,6 +126,7 @@ const createPrNpp = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'PR NPP created successfully',
+      serialNumber: savedPr.uniqueSerialNo,
       data: savedPr
     });
   } catch (err) {
@@ -229,7 +219,8 @@ const approvePrNpp = async (req, res) => {
     await pr.save();
     
     try {
-      await sendPRNppApprovedEmail(pr, { name: userName, remarks: comments });
+      await sendPRApprovedEmail(pr, { name: userName, remarks: comments });
+      console.log("📧 Approval email sent");
     } catch (emailErr) {
       console.error('Approval email error:', emailErr.message);
     }
@@ -268,7 +259,8 @@ const rejectPrNpp = async (req, res) => {
     await pr.save();
     
     try {
-      await sendPRNppRejectedEmail(pr, { name: userName, remarks: comments });
+      await sendPRRejectedEmail(pr, { name: userName, remarks: comments });
+      console.log("📧 Rejection email sent");
     } catch (emailErr) {
       console.error('Rejection email error:', emailErr.message);
     }

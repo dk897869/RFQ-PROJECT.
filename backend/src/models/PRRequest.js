@@ -1,17 +1,17 @@
 const mongoose = require('mongoose');
 
-const rfqItemSchema = new mongoose.Schema({
-  description: { type: String, required: true },
+const prItemSchema = new mongoose.Schema({
+  costCenter: { type: String, default: '' },
+  supplierName: { type: String, default: '' },
+  partCode: { type: String, default: '' },
+  partDescription: { type: String, default: '' },
+  specification: { type: String, default: '' },
   uom: { type: String, default: 'PCS' },
-  quantity: { type: Number, required: true, default: 0 },
-  make: { type: String, default: '' },
-  alternative: { type: String, default: '' },
-  vendorRef: { type: String, default: '' },
-  remark: { type: String, default: '' },
-  picture: { type: String, default: '' }
+  qty: { type: Number, default: 0 },
+  unitPrice: { type: Number, default: 0 }
 });
 
-const approverSchema = new mongoose.Schema({
+const prApproverSchema = new mongoose.Schema({
   line: { type: String, enum: ['Parallel', 'Sequential'], default: 'Parallel' },
   managerName: { type: String, default: '' },
   email: { type: String, default: '' },
@@ -21,14 +21,14 @@ const approverSchema = new mongoose.Schema({
   remarks: { type: String, default: '' }
 });
 
-const attachmentSchema = new mongoose.Schema({
+const prAttachmentSchema = new mongoose.Schema({
   name: { type: String, default: '' },
   fileSize: { type: String, default: '' },
   fileUrl: { type: String, default: '' },
   remark: { type: String, default: '' }
 });
 
-const rfqSchema = new mongoose.Schema({
+const prRequestSchema = new mongoose.Schema({
   uniqueSerialNo: { type: String, unique: true, required: true },
   requesterName: { type: String, required: true },
   department: { type: String, required: true },
@@ -38,19 +38,16 @@ const rfqSchema = new mongoose.Schema({
   organization: { type: String, default: 'Radiant Appliances' },
   titleOfActivity: { type: String, required: true },
   purposeAndObjective: { type: String, default: '' },
-  vendor: { type: String, default: '' },
-  amount: { type: Number, default: 0 },
   priority: { type: String, enum: ['H', 'M', 'L'], default: 'M' },
-  items: [rfqItemSchema],
-  stakeholders: [approverSchema],
+  items: [prItemSchema],
+  stakeholders: [prApproverSchema],
   ccList: [{ type: String }],
-  attachments: [attachmentSchema],
+  attachments: [prAttachmentSchema],
   status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'In Process'], default: 'Pending' },
-  currentApprover: { type: String, default: '' },
-  source: { type: String, default: 'RFQ-NPP' },
+  source: { type: String, default: 'PR-REQUEST-NPP' },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
 
-module.exports = mongoose.model('RFQ', rfqSchema);
+module.exports = mongoose.model('PRRequest', prRequestSchema);

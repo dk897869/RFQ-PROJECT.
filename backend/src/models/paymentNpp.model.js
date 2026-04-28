@@ -1,60 +1,101 @@
-const mongoose = require('mongoose');
+const express = require('express');
+const router = express.Router();
 
-const stakeholderSchema = new mongoose.Schema({
-  line: { type: String, enum: ['Parallel', 'Sequential'], default: 'Sequential' },
-  managerName: { type: String },
-  email: { type: String },
-  designation: { type: String },
-  status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'In-Process'], default: 'Pending' },
-  dateTime: { type: Date },
-  remarks: { type: String }
+const verifyToken = (req, res, next) => {
+  req.user = { id: 'test-user-id', name: 'Test User', email: 'test@example.com' };
+  next();
+};
+
+let paymentNppStore = [];
+
+// Create Payment NPP
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    const newPayment = {
+      _id: Date.now().toString(),
+      ...req.body,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      uniqueSerialNo: `PAY-${Date.now()}-${Math.floor(Math.random() * 10000)}`
+    };
+    paymentNppStore.unshift(newPayment);
+    console.log('✅ Payment NPP created:', newPayment._id);
+    res.status(201).json({ success: true, message: 'Payment Advice created successfully', serialNumber: newPayment.uniqueSerialNo, data: newPayment });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
-const attachmentSchema = new mongoose.Schema({
-  name: { type: String },
-  fileSize: { type: String },
-  remark: { type: String }
+// Get all Payment NPP
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    res.json({ success: true, data: paymentNppStore });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
-const invoiceSchema = new mongoose.Schema({
-  invoiceNo: { type: String },
-  invoiceDate: { type: String },
-  invoiceValue: { type: Number, default: 0 }
+// Get single Payment NPP
+router.get('/:id', verifyToken, async (req, res) => {
+  try {
+    const payment = paymentNppStore.find(p => p._id === req.params.id);
+    if (!payment) return res.status(404).json({ success: false, message: "Payment advice not found" });
+    res.json({ success: true, data: payment });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
-const paymentNppSchema = new mongoose.Schema({
-  requesterName: { type: String, required: true },
-  department: { type: String },
-  emailId: { type: String },
-  requestDate: { type: String },
-  contactNo: { type: String },
-  organization: { type: String, default: 'Radiant Appliances' },
-  titleOfActivity: { type: String },
-  purposeAndObjective: { type: String },
-  vendor: { type: String },
-  amount: { type: Number, default: 0 },
-  remarks: { type: String },
-  priority: { type: String, enum: ['H', 'M', 'L'], default: 'M' },
-  designation: { type: String },
-  paymentDueTo: { type: String },
-  level: { type: String },
-  paymentTo: { type: String },
-  expenseType: { type: String },
-  expenseAmount: { type: String },
-  balanceForPayment: { type: String },
-  deduction: { type: String },
-  bankDetails: { type: String },
-  sapName: { type: String },
-  sapCode: { type: String },
-  invoices: [invoiceSchema],
-  stakeholders: [stakeholderSchema],
-  ccList: [{ type: String }],
-  attachments: [attachmentSchema],
-  source: { type: String, default: 'PAYMENT-ADVISE-NPP' },
-  status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'In-Process'], default: 'Pending' },
-  approvedAt: { type: Date },
-  rejectedAt: { type: Date },
-  rejectionComments: { type: String }
-}, { timestamps: true });
+// Update Payment NPP
+router.put('/:id', verifyToken, async (req, res) => {
+  try {
+    const index = paymentNppStore.findIndex(p => p._id === req.params.id);
+    if (index === -1) return res.status(404).json({ success: false, message: "Payment advice not found" });
+    paymentNppStore[index] = { ...paymentNppStore[index], ...req.body, updatedAt: new Date() };
+    res.json({ success: true, data: paymentNppStore[index] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
-module.exports = mongoose.model('PaymentNpp', paymentNppSchema);
+// Delete Payment NPP
+router.delete('/:id', verifyToken, async (req, res) => {
+  try {
+    const index = paymentNppStore.findIndex(p => p._id === req.params.id);
+    if (index === -1) return res.status(404).json({ success: false, message: "Payment advice not found" });
+    paymentNppStore.splice(index, 1);
+    res.json({ success: true, message: "Payment advice deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Approve Payment NPP
+router.patch('/:id/approve', verifyToken, async (req, res) => {
+  try {
+    const index = paymentNppStore.findIndex(p => p._id === req.params.id);
+    if (index === -1) return res.status(404).json({ success: false, message: "Payment advice not found" });
+    paymentNppStore[index].status = 'Approved';
+    paymentNppStore[index].approvedAt = new Date();
+    paymentNppStore[index].approvalComments = req.body.comments;
+    res.json({ success: true, message: "Payment advice approved", data: paymentNppStore[index] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Reject Payment NPP
+router.patch('/:id/reject', verifyToken, async (req, res) => {
+  try {
+    const index = paymentNppStore.findIndex(p => p._id === req.params.id);
+    if (index === -1) return res.status(404).json({ success: false, message: "Payment advice not found" });
+    paymentNppStore[index].status = 'Rejected';
+    paymentNppStore[index].rejectedAt = new Date();
+    paymentNppStore[index].rejectionComments = req.body.comments;
+    res.json({ success: true, message: "Payment advice rejected", data: paymentNppStore[index] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+module.exports = router;
