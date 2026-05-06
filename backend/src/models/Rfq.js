@@ -1,14 +1,15 @@
 const mongoose = require('mongoose');
 
 const rfqItemSchema = new mongoose.Schema({
-  description: { type: String, required: true },
+  itemDescription: { type: String, required: true },
   uom: { type: String, default: 'PCS' },
   quantity: { type: Number, required: true, default: 0 },
   make: { type: String, default: '' },
-  alternative: { type: String, default: '' },
-  vendorRef: { type: String, default: '' },
+  alternativeSimilar: { type: String, default: '' },
+  pictureExistingVendorReference: { type: String, default: '' },
   remark: { type: String, default: '' },
-  picture: { type: String, default: '' }
+  pictureName: { type: String, default: '' },
+  picturePreview: { type: String, default: '' }
 });
 
 const approverSchema = new mongoose.Schema({
@@ -17,7 +18,7 @@ const approverSchema = new mongoose.Schema({
   email: { type: String, default: '' },
   designation: { type: String, default: '' },
   status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'In-Process'], default: 'Pending' },
-  dateTime: { type: String, default: '' },
+  dateTime: { type: Date, default: null },
   remarks: { type: String, default: '' }
 });
 
@@ -29,7 +30,7 @@ const attachmentSchema = new mongoose.Schema({
 });
 
 const rfqSchema = new mongoose.Schema({
-  uniqueSerialNo: { type: String, unique: true, required: true },
+  uniqueSerialNo: { type: String, unique: true, sparse: true },
   requesterName: { type: String, required: true },
   department: { type: String, required: true },
   emailId: { type: String, required: true },
@@ -43,14 +44,26 @@ const rfqSchema = new mongoose.Schema({
   priority: { type: String, enum: ['H', 'M', 'L'], default: 'M' },
   items: [rfqItemSchema],
   stakeholders: [approverSchema],
-  ccList: [{ type: String }],
+  ccTo: [{ type: String }],
   attachments: [attachmentSchema],
-  status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'In Process'], default: 'Pending' },
+  status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'In-Process'], default: 'Pending' },
   currentApprover: { type: String, default: '' },
   source: { type: String, default: 'RFQ-NPP' },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  updatedAt: { type: Date, default: Date.now },
+  approvedAt: { type: Date },
+  approvedBy: { type: String },
+  approvalComments: { type: String },
+  rejectedAt: { type: Date },
+  rejectedBy: { type: String },
+  rejectionComments: { type: String }
 });
+
+// Create indexes
+rfqSchema.index({ uniqueSerialNo: 1 });
+rfqSchema.index({ emailId: 1 });
+rfqSchema.index({ status: 1 });
+rfqSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('RFQ', rfqSchema);

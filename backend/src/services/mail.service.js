@@ -1,12 +1,53 @@
 const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
 let resendClient = null;
+let smtpTransporter = null;
 
-function getFromAddress() {
-  return process.env.FROM_EMAIL || 'onboarding@resend.dev';
+// Initialize Gmail SMTP Transporter
+function getSMTPTransporter() {
+  if (smtpTransporter) return smtpTransporter;
+  
+  if (process.env.SMTP_ENABLED === 'true' && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    smtpTransporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+      },
+      tls: {
+        rejectUnauthorized: false
+      },
+      connectionTimeout: 30000,
+      greetingTimeout: 30000,
+      socketTimeout: 30000
+    });
+    
+    smtpTransporter.verify((error, success) => {
+      if (error) {
+        console.error('❌ SMTP Connection Error:', error.message);
+      } else {
+        console.log('✅ SMTP is ready to send emails');
+      }
+    });
+  }
+  
+  return smtpTransporter;
 }
 
-// ====================== ESCAPE HTML FUNCTION ======================
+function getFromAddress() {
+  if (process.env.SMTP_ENABLED === 'true' && process.env.SMTP_FROM) {
+    return process.env.SMTP_FROM;
+  }
+  return process.env.FROM_EMAIL || 'noreply@lcgc.com';
+}
+
+function getFromName() {
+  return process.env.RESEND_FROM_NAME || 'LCGC System';
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -18,449 +59,887 @@ function escapeHtml(str) {
     .replace(/\n/g, '<br>');
 }
 
-// ====================== SIMPLE EMAIL TEMPLATE (No PDF) ======================
-const getSimpleEmailHTML = (data, type, action, actor, nextApprover) => {
-  // Determine request type
-  const isEP = data.stakeholders !== undefined && !data.source && !data.items;
-  const isRFQ = data.items !== undefined && !data.source && !data.orderNo;
-  const isPR = data.source === 'PR-REQUEST-NPP' || (data.items && data.items[0] && data.items[0].costCenter);
-  const isPO = data.source === 'PO-NPP' || (data.orderNo !== undefined);
-  const isPayment = data.source === 'PAYMENT-ADVISE-NPP' || (data.invoices !== undefined);
+// OTP Email Template
+function getOTPEmailHTML(name, otp, type) {
+  let title = '';
+  let subjectPrefix = '';
   
-  const title = isEP ? data.title : (isRFQ ? data.titleOfActivity : (isPO ? (data.orderNo || data.titleOfActivity) : (isPR ? data.titleOfActivity : (data.titleOfActivity || 'Request'))));
-  const requester = isEP ? data.requester : (data.requesterName || data.purchaser || 'User');
-  const department = data.department || data.dept || '—';
-  const amount = data.amount || data.expenseAmount || 0;
-  const priorityValue = data.priority === 'H' ? 'High' : data.priority === 'M' ? 'Medium' : data.priority === 'L' ? 'Low' : (data.priority || 'Medium');
-  
-  const priorityColor = priorityValue === 'High' ? '#dc2626' : priorityValue === 'Medium' ? '#d97706' : '#16a34a';
-  const statusColor = data.status === 'Approved' ? '#059669' : data.status === 'Rejected' ? '#dc2626' : '#d97706';
-  
-  let headerTitle = '';
-  let headerSubtitle = '';
-  let headerIcon = '';
-  let needsApproval = false;
-  
-  if (type === 'created') {
-    headerTitle = 'New Request Created';
-    headerSubtitle = 'A new procurement request requires your attention';
-    headerIcon = '📋';
-    needsApproval = true;
-  } else if (type === 'approved') {
-    headerTitle = 'Request Approved';
-    headerSubtitle = `Approved by ${actor?.name || 'Approver'}`;
-    headerIcon = '✅';
-  } else if (type === 'rejected') {
-    headerTitle = 'Request Rejected';
-    headerSubtitle = `Rejected by ${actor?.name || 'Approver'}`;
-    headerIcon = '❌';
-  } else if (type === 'approval_needed') {
-    headerTitle = 'Action Required';
-    headerSubtitle = 'Your approval is needed for this request';
-    headerIcon = '⚠️';
-    needsApproval = true;
-  } else if (type === 'cc_notification') {
-    headerTitle = 'Request Notification';
-    headerSubtitle = 'You have been CC\'d on this request';
-    headerIcon = '📧';
+  switch(type) {
+    case 'login':
+      title = 'Login Verification';
+      subjectPrefix = 'Your Login OTP';
+      break;
+    case 'registration':
+      title = 'Email Verification';
+      subjectPrefix = 'Verify Your Email';
+      break;
+    case 'reset':
+      title = 'Password Reset';
+      subjectPrefix = 'Password Reset OTP';
+      break;
+    case 'email_verification':
+      title = 'Email Verification';
+      subjectPrefix = 'Verify Your Email Address';
+      break;
+    default:
+      title = 'OTP Verification';
+      subjectPrefix = 'Your OTP';
   }
   
-  const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:4200';
-  let approveUrl = `${baseUrl}/dashboard`;
-  if (isEP) approveUrl = `${baseUrl}/dashboard/ep-approval`;
-  else if (isRFQ) approveUrl = `${baseUrl}/dashboard/rfq`;
-  else if (isPR) approveUrl = `${baseUrl}/dashboard/npp-procurement`;
-  else if (isPO) approveUrl = `${baseUrl}/dashboard/po-npp`;
-  else if (isPayment) approveUrl = `${baseUrl}/dashboard/payment-advise`;
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${subjectPrefix} - LCGC</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f6f9; }
+    .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center; }
+    .header h1 { color: white; margin: 0; font-size: 28px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 8px 0 0; }
+    .content { padding: 30px; }
+    .greeting { font-size: 16px; color: #1e293b; margin-bottom: 20px; }
+    .otp-box { background: #f8fafc; border: 2px dashed #cbd5e1; padding: 25px; text-align: center; border-radius: 12px; margin: 20px 0; }
+    .otp-code { font-size: 42px; font-weight: bold; letter-spacing: 8px; color: #0f2a5e; background: white; padding: 15px 25px; border-radius: 10px; display: inline-block; font-family: monospace; }
+    .expiry-text { font-size: 12px; color: #64748b; margin-top: 12px; }
+    .button { display: inline-block; padding: 12px 28px; background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; margin-top: 20px; }
+    .footer { text-align: center; padding: 20px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; margin-top: 20px; }
+    .warning { background: #fef3c7; padding: 12px; border-radius: 8px; font-size: 12px; color: #92400e; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>LCGC System</h1>
+      <p>Resolute Group</p>
+    </div>
+    <div class="content">
+      <div class="greeting">
+        Hello <strong>${escapeHtml(name)}</strong>,
+      </div>
+      <h2 style="color: #0f2a5e;">${title}</h2>
+      <p>Please use the following One-Time Password (OTP) to complete your ${type === 'login' ? 'login' : type === 'registration' ? 'registration' : 'password reset'} process:</p>
+      <div class="otp-box">
+        <div class="otp-code">${otp}</div>
+        <div class="expiry-text">⏰ This OTP is valid for <strong>10 minutes</strong></div>
+      </div>
+      <p>If you didn't request this, please ignore this email.</p>
+      <div class="warning">
+        ⚠️ For security reasons, never share this OTP with anyone.
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message, please do not reply.</p>
+      <p>&copy; ${new Date().getFullYear()} LCGC System. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// Email Verification Link Template
+function getEmailVerificationLinkHTML(name, verificationLink) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verify Your Email - LCGC</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f6f9; }
+    .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e 0%, #1e4a8a 100%); padding: 30px; text-align: center; }
+    .header h1 { color: white; margin: 0; font-size: 28px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 8px 0 0; }
+    .content { padding: 30px; }
+    .greeting { font-size: 16px; color: #1e293b; margin-bottom: 20px; }
+    .verify-box { background: #f8fafc; padding: 25px; text-align: center; border-radius: 12px; margin: 20px 0; }
+    .verify-button { display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #059669, #047857); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; font-size: 16px; margin: 10px 0; }
+    .expiry-text { font-size: 12px; color: #64748b; margin-top: 12px; }
+    .footer { text-align: center; padding: 20px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; margin-top: 20px; }
+    .warning { background: #fef3c7; padding: 12px; border-radius: 8px; font-size: 12px; color: #92400e; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>LCGC System</h1>
+      <p>Resolute Group</p>
+    </div>
+    <div class="content">
+      <div class="greeting">
+        Hello <strong>${escapeHtml(name)}</strong>,
+      </div>
+      <h2 style="color: #0f2a5e;">Verify Your Email Address</h2>
+      <p>Thank you for registering with LCGC System. Please verify your email address to complete your registration and start using the platform.</p>
+      <div class="verify-box">
+        <p>Click the button below to verify your email:</p>
+        <a href="${verificationLink}" class="verify-button">✓ Verify Email Address</a>
+        <div class="expiry-text">⏰ This verification link is valid for <strong>24 hours</strong></div>
+      </div>
+      <p>If the button doesn't work, copy and paste this link into your browser:</p>
+      <p style="word-break: break-all; font-size: 12px; color: #3b82f6;">${verificationLink}</p>
+      <div class="warning">
+        ⚠️ If you didn't create an account with LCGC, please ignore this email.
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message, please do not reply.</p>
+      <p>&copy; ${new Date().getFullYear()} LCGC System. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// Welcome Email Template (After Verification)
+function getWelcomeEmailHTML(name) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to LCGC - Account Verified!</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f6f9; }
+    .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #059669 0%, #047857 100%); padding: 30px; text-align: center; }
+    .header h1 { color: white; margin: 0; font-size: 28px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 8px 0 0; }
+    .content { padding: 30px; }
+    .greeting { font-size: 16px; color: #1e293b; margin-bottom: 20px; }
+    .features { display: flex; gap: 20px; margin: 30px 0; flex-wrap: wrap; }
+    .feature { flex: 1; text-align: center; padding: 20px; background: #f8fafc; border-radius: 12px; }
+    .feature-icon { font-size: 32px; margin-bottom: 10px; }
+    .feature-title { font-weight: 700; color: #0f2a5e; margin-bottom: 5px; }
+    .feature-desc { font-size: 12px; color: #64748b; }
+    .button { display: inline-block; padding: 12px 28px; background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; margin-top: 20px; }
+    .footer { text-align: center; padding: 20px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Welcome to LCGC!</h1>
+      <p>Your account has been verified</p>
+    </div>
+    <div class="content">
+      <div class="greeting">
+        Hello <strong>${escapeHtml(name)}</strong>,
+      </div>
+      <h2 style="color: #0f2a5e;">🎉 Your Email Has Been Verified!</h2>
+      <p>Thank you for verifying your email address. Your account is now fully activated and you can start using the LCGC Procurement System.</p>
+      
+      <div class="features">
+        <div class="feature">
+          <div class="feature-icon">📋</div>
+          <div class="feature-title">EP Approvals</div>
+          <div class="feature-desc">Submit and track approval requests</div>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🛒</div>
+          <div class="feature-title">RFQ Management</div>
+          <div class="feature-desc">Create and manage RFQs</div>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🏢</div>
+          <div class="feature-title">Vendor Portal</div>
+          <div class="feature-desc">Manage vendor relationships</div>
+        </div>
+      </div>
+      
+      <div style="text-align: center;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:4200'}/dashboard" class="button">🚀 Go to Dashboard</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message, please do not reply.</p>
+      <p>&copy; ${new Date().getFullYear()} LCGC System. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// RFQ Email Template
+function getRFQEmailHTML(data, action) {
+  const title = data.titleOfActivity || 'RFQ Request';
+  const requester = data.requesterName || data.requester || 'User';
+  const department = data.department || '—';
+  const amount = data.estimatedAmount || data.amount || 0;
+  const priorityValue = data.priority === 'H' ? 'High' : data.priority === 'M' ? 'Medium' : 'Low';
+  const serialNo = data.uniqueSerialNo || data._id || '';
   
-  // Items HTML for PR
-  const prItemsHtml = (data.items || []).map((item, idx) => {
+  const headerIcon = action === 'created' ? '📋' : action === 'approved' ? '✅' : action === 'rejected' ? '❌' : '⚠️';
+  const headerTitle = action === 'created' ? 'New RFQ Created' : action === 'approved' ? 'RFQ Approved' : action === 'rejected' ? 'RFQ Rejected' : 'Action Required';
+  
+  const baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:4200';
+  const approveUrl = `${baseUrl}/dashboard`;
+  
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LCGC - ${escapeHtml(title)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; padding: 40px 20px; margin: 0; }
+    .container { max-width: 650px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e, #1e4a8a); padding: 40px; text-align: center; }
+    .header-icon { font-size: 48px; }
+    .header h1 { color: white; font-size: 28px; margin: 16px 0 8px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 0; }
+    .content { padding: 40px; }
+    .section { margin-bottom: 24px; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+    .section-title { background: #f8fafc; padding: 12px 20px; font-weight: 700; color: #0f2a5e; border-bottom: 1px solid #e2e8f0; }
+    .section-body { padding: 20px; }
+    .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .info-item label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; display: block; margin-bottom: 4px; }
+    .info-item span { font-size: 14px; color: #0f172a; font-weight: 500; }
+    .amount-box { background: linear-gradient(135deg, #e0e7ff, #c7d2fe); border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px; }
+    .amount-value { font-size: 32px; font-weight: 800; color: #1e40af; }
+    .serial-badge { display: inline-block; background: #eef2ff; color: #3730a3; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .btn { display: inline-block; padding: 12px 28px; background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; margin-top: 16px; }
+    .footer { background: #f8fafc; padding: 24px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
+    @media (max-width: 600px) { .content { padding: 24px; } .info-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-icon">${headerIcon}</div>
+      <h1>${headerTitle}</h1>
+      <p>RFQ ${action === 'created' ? 'Submitted' : action === 'approved' ? 'Approved' : 'Action Required'}</p>
+    </div>
+    <div class="content">
+      <div class="section">
+        <div class="section-title">📋 RFQ Information</div>
+        <div class="section-body">
+          <div class="info-grid">
+            <div class="info-item"><label>Serial Number</label><span class="serial-badge">${escapeHtml(serialNo)}</span></div>
+            <div class="info-item"><label>Status</label><span>${data.status || 'Pending'}</span></div>
+            <div class="info-item"><label>Title</label><span>${escapeHtml(title)}</span></div>
+            <div class="info-item"><label>Priority</label><span>${priorityValue}</span></div>
+            <div class="info-item"><label>Requester</label><span>${escapeHtml(requester)}</span></div>
+            <div class="info-item"><label>Department</label><span>${escapeHtml(department)}</span></div>
+            <div class="info-item"><label>Email</label><span>${escapeHtml(data.emailId || data.email)}</span></div>
+            <div class="info-item"><label>Request Date</label><span>${data.requestDate || new Date().toLocaleDateString()}</span></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="amount-box">
+        <div class="amount-value">₹${Number(amount).toLocaleString('en-IN')}</div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Estimated Amount</div>
+      </div>
+      
+      <div style="text-align: center;">
+        <a href="${approveUrl}" class="btn">🔍 View in Dashboard</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message from LCGC System</p>
+      <p>© ${new Date().getFullYear()} LCGC. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// EP Approval Email Template
+function getEPEmailHTML(data, action) {
+  const title = data.title || 'EP Request';
+  const requester = data.requester || data.requesterName || 'User';
+  const department = data.department || '—';
+  const amount = data.amount || 0;
+  const priorityValue = data.priority || 'Medium';
+  const serialNo = data.uniqueSerialNo || data._id || '';
+  
+  const headerIcon = action === 'created' ? '📋' : action === 'approved' ? '✅' : action === 'rejected' ? '❌' : '⚠️';
+  const headerTitle = action === 'created' ? 'New EP Request Created' : action === 'approved' ? 'EP Request Approved' : action === 'rejected' ? 'EP Request Rejected' : 'Action Required';
+  
+  const baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:4200';
+  const approveUrl = `${baseUrl}/dashboard`;
+  
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LCGC - ${escapeHtml(title)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; padding: 40px 20px; margin: 0; }
+    .container { max-width: 650px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e, #1e4a8a); padding: 40px; text-align: center; }
+    .header-icon { font-size: 48px; }
+    .header h1 { color: white; font-size: 28px; margin: 16px 0 8px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 0; }
+    .content { padding: 40px; }
+    .section { margin-bottom: 24px; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+    .section-title { background: #f8fafc; padding: 12px 20px; font-weight: 700; color: #0f2a5e; border-bottom: 1px solid #e2e8f0; }
+    .section-body { padding: 20px; }
+    .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .info-item label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; display: block; margin-bottom: 4px; }
+    .info-item span { font-size: 14px; color: #0f172a; font-weight: 500; }
+    .amount-box { background: linear-gradient(135deg, #e0e7ff, #c7d2fe); border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px; }
+    .amount-value { font-size: 32px; font-weight: 800; color: #1e40af; }
+    .btn { display: inline-block; padding: 12px 28px; background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; margin-top: 16px; }
+    .footer { background: #f8fafc; padding: 24px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
+    @media (max-width: 600px) { .content { padding: 24px; } .info-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-icon">${headerIcon}</div>
+      <h1>${headerTitle}</h1>
+      <p>EP Request ${action === 'created' ? 'Submitted' : action === 'approved' ? 'Approved' : 'Action Required'}</p>
+    </div>
+    <div class="content">
+      <div class="section">
+        <div class="section-title">📋 Request Information</div>
+        <div class="section-body">
+          <div class="info-grid">
+            <div class="info-item"><label>Serial Number</label><span class="serial-badge">${escapeHtml(serialNo)}</span></div>
+            <div class="info-item"><label>Status</label><span>${data.status || 'Pending'}</span></div>
+            <div class="info-item"><label>Title</label><span>${escapeHtml(title)}</span></div>
+            <div class="info-item"><label>Priority</label><span>${priorityValue}</span></div>
+            <div class="info-item"><label>Requester</label><span>${escapeHtml(requester)}</span></div>
+            <div class="info-item"><label>Department</label><span>${escapeHtml(department)}</span></div>
+            <div class="info-item"><label>Email</label><span>${escapeHtml(data.email)}</span></div>
+            <div class="info-item"><label>Request Date</label><span>${data.requestDate || new Date().toLocaleDateString()}</span></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="amount-box">
+        <div class="amount-value">₹${Number(amount).toLocaleString('en-IN')}</div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Total Amount</div>
+      </div>
+      
+      <div style="text-align: center;">
+        <a href="${approveUrl}" class="btn">🔍 View in Dashboard</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message from LCGC System</p>
+      <p>© ${new Date().getFullYear()} LCGC. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// PR NPP Email Template
+function getPRNppEmailHTML(data, action) {
+  const title = data.titleOfActivity || 'PR Request';
+  const requester = data.requesterName || 'User';
+  const department = data.department || '—';
+  const amount = data.amount || 0;
+  const priorityValue = data.priority === 'H' ? 'High' : data.priority === 'M' ? 'Medium' : 'Low';
+  const serialNo = data.uniqueSerialNo || '';
+  
+  const headerIcon = action === 'created' ? '📋' : action === 'approved' ? '✅' : action === 'rejected' ? '❌' : '⚠️';
+  const headerTitle = action === 'created' ? 'New PR Request Created' : action === 'approved' ? 'PR Request Approved' : action === 'rejected' ? 'PR Request Rejected' : 'Action Required';
+  
+  const baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:4200';
+  const approveUrl = `${baseUrl}/dashboard`;
+  
+  let prTotalValue = 0;
+  const itemsHtml = (data.items || []).map((item, idx) => {
     const total = (item.qty || 0) * (item.unitPrice || 0);
+    prTotalValue += total;
     return `
     <tr style="border-bottom: 1px solid #e2e8f0;">
       <td style="padding: 8px;">${idx + 1}</td>
-      <td style="padding: 8px;">${escapeHtml(item.partCode || '—')}</td>
-      <td style="padding: 8px;"><strong>${escapeHtml(item.partDescription || '—')}</strong></td>
-      <td style="padding: 8px;">${escapeHtml(item.uom || 'Pcs')}</td>
+      <td style="padding: 8px;"><strong>${escapeHtml(item.partDescription)}</strong></td>
+      <td style="padding: 8px;">${item.partCode || '—'}</td>
       <td style="padding: 8px;">${item.qty || 0}</td>
       <td style="padding: 8px;">₹${(item.unitPrice || 0).toLocaleString('en-IN')}</td>
       <td style="padding: 8px;">₹${total.toLocaleString('en-IN')}</td>
     </tr>`;
   }).join('');
   
-  let prTotalValue = (data.items || []).reduce((sum, item) => sum + ((item.qty || 0) * (item.unitPrice || 0)), 0);
-  
-  // Stakeholders HTML
-  const stakeholdersHtml = (data.stakeholders || []).map((s, idx) => `
-    <tr style="border-bottom: 1px solid #e2e8f0;">
-      <td style="padding: 10px 8px;">${idx + 1}</td>
-      <td style="padding: 10px 8px;">${s.line || 'Sequential'}</td>
-      <td style="padding: 10px 8px;"><strong>${escapeHtml(s.name || s.managerName || '—')}</strong></td>
-      <td style="padding: 10px 8px;">${escapeHtml(s.designation || '—')}</td>
-      <td style="padding: 10px 8px;">${escapeHtml(s.email || '—')}</td>
-      <td style="padding: 10px 8px;"><span style="display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; background: ${s.status === 'Approved' ? '#d1fae5' : s.status === 'Rejected' ? '#fee2e2' : '#fef3c7'}; color: ${s.status === 'Approved' ? '#059669' : s.status === 'Rejected' ? '#dc2626' : '#d97706'};">${s.status || 'Pending'}</span></td>
-      <td style="padding: 10px 8px;">${s.remarks || '—'}</td>
-    </tr>
-  `).join('');
-  
-  // CC HTML
-  const ccHtml = (data.ccList || data.ccTo || []).map(cc => `
-    <span style="display: inline-block; background: #eff6ff; color: #1e40af; padding: 4px 12px; border-radius: 20px; font-size: 12px; margin: 4px;">
-      📧 ${escapeHtml(cc)}
-    </span>
-  `).join('');
-  
   return `<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LCGC - ${escapeHtml(title)}</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
-      padding: 40px 20px;
-      line-height: 1.6;
-    }
-    .email-container {
-      max-width: 700px;
-      margin: 0 auto;
-      background: #ffffff;
-      border-radius: 24px;
-      overflow: hidden;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-    }
-    .email-header {
-      background: linear-gradient(135deg, #0f2a5e, #1e4a8a);
-      padding: 40px;
-      text-align: center;
-    }
-    .email-header-icon { font-size: 48px; margin-bottom: 16px; }
-    .email-header h1 { color: white; font-size: 28px; font-weight: 700; margin: 0 0 8px; }
-    .email-header p { color: rgba(255,255,255,0.9); font-size: 14px; margin: 0; }
-    .email-content { padding: 40px; }
-    .greeting { margin-bottom: 24px; }
-    .greeting h2 { font-size: 20px; color: #0f172a; margin: 0 0 8px; }
-    .section {
-      margin-bottom: 24px;
-      border: 1px solid #e2e8f0;
-      border-radius: 16px;
-      overflow: hidden;
-    }
-    .section-title {
-      background: #f8fafc;
-      padding: 14px 20px;
-      font-weight: 700;
-      color: #0f2a5e;
-      border-bottom: 1px solid #e2e8f0;
-      font-size: 15px;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; padding: 40px 20px; margin: 0; }
+    .container { max-width: 650px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e, #1e4a8a); padding: 40px; text-align: center; }
+    .header-icon { font-size: 48px; }
+    .header h1 { color: white; font-size: 28px; margin: 16px 0 8px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 0; }
+    .content { padding: 40px; }
+    .section { margin-bottom: 24px; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+    .section-title { background: #f8fafc; padding: 12px 20px; font-weight: 700; color: #0f2a5e; border-bottom: 1px solid #e2e8f0; }
     .section-body { padding: 20px; }
-    .info-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 16px;
-    }
-    .info-item { display: flex; flex-direction: column; }
-    .info-item label {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      color: #64748b;
-      margin-bottom: 4px;
-    }
+    .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .info-item label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; display: block; margin-bottom: 4px; }
     .info-item span { font-size: 14px; color: #0f172a; font-weight: 500; }
-    .amount-box {
-      background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
-      border-radius: 12px;
-      padding: 16px 24px;
-      text-align: center;
-      margin-bottom: 24px;
-    }
+    .amount-box { background: linear-gradient(135deg, #e0e7ff, #c7d2fe); border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px; }
     .amount-value { font-size: 32px; font-weight: 800; color: #1e40af; }
-    .amount-label { font-size: 12px; color: #64748b; margin-bottom: 8px; }
-    .priority-badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 11px;
-      font-weight: 600;
-      background: ${priorityColor}20;
-      color: ${priorityColor};
-    }
-    .status-badge {
-      display: inline-block;
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 11px;
-      font-weight: 600;
-      background: ${statusColor}20;
-      color: ${statusColor};
-    }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th {
-      background: #f1f5f9;
-      padding: 10px 8px;
-      text-align: left;
-      font-weight: 600;
-      color: #475569;
-    }
-    td { padding: 8px; border-bottom: 1px solid #f1f5f9; }
-    .button-group {
-      display: flex;
-      gap: 16px;
-      justify-content: center;
-      margin: 24px 0;
-      flex-wrap: wrap;
-    }
-    .btn-approve {
-      display: inline-block;
-      padding: 12px 28px;
-      background: #059669;
-      color: white;
-      text-decoration: none;
-      border-radius: 40px;
-      font-weight: 600;
-      transition: all 0.3s;
-    }
-    .btn-approve:hover { background: #047857; transform: translateY(-2px); }
-    .btn-reject {
-      display: inline-block;
-      padding: 12px 28px;
-      background: #dc2626;
-      color: white;
-      text-decoration: none;
-      border-radius: 40px;
-      font-weight: 600;
-      transition: all 0.3s;
-    }
-    .btn-reject:hover { background: #b91c1c; transform: translateY(-2px); }
-    .btn-view {
-      display: inline-block;
-      padding: 12px 28px;
-      background: linear-gradient(135deg, #0f2a5e, #1e4a8a);
-      color: white;
-      text-decoration: none;
-      border-radius: 40px;
-      font-weight: 600;
-      margin-top: 16px;
-    }
-    .cc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-    .footer {
-      background: #f8fafc;
-      padding: 24px;
-      text-align: center;
-      font-size: 12px;
-      color: #64748b;
-      border-top: 1px solid #e2e8f0;
-    }
-    @media (max-width: 600px) {
-      .email-content { padding: 24px; }
-      .info-grid { grid-template-columns: 1fr; gap: 12px; }
-      .button-group { flex-direction: column; align-items: center; }
-    }
+    .serial-badge { display: inline-block; background: #eef2ff; color: #3730a3; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .btn { display: inline-block; padding: 12px 28px; background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; margin-top: 16px; }
+    .footer { background: #f8fafc; padding: 24px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
+    @media (max-width: 600px) { .content { padding: 24px; } .info-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <div class="email-container">
-    <div class="email-header">
-      <div class="email-header-icon">${headerIcon}</div>
+  <div class="container">
+    <div class="header">
+      <div class="header-icon">${headerIcon}</div>
       <h1>${headerTitle}</h1>
-      <p>${headerSubtitle}</p>
+      <p>PR Request ${action === 'created' ? 'Submitted' : action === 'approved' ? 'Approved' : 'Action Required'}</p>
     </div>
-    
-    <div class="email-content">
-      <div class="greeting">
-        <h2>Hello ${actor ? escapeHtml(actor.name) : 'Team'},</h2>
-        <p style="color: #475569; margin-top: 8px;">
-          ${type === 'created' ? 'A new request has been submitted for your review.' : 
-            type === 'approved' ? 'The request has been approved.' : 
-            type === 'rejected' ? 'The request has been rejected.' : 
-            type === 'cc_notification' ? 'You have been CC\'d on this request.' :
-            'Please review this request and take action.'}
-        </p>
-      </div>
-      
+    <div class="content">
       <div class="section">
-        <div class="section-title">👤 Requester Information</div>
+        <div class="section-title">📋 PR Information</div>
         <div class="section-body">
           <div class="info-grid">
-            <div class="info-item"><label>Name</label><span>${escapeHtml(requester)}</span></div>
+            <div class="info-item"><label>Serial Number</label><span class="serial-badge">${escapeHtml(serialNo)}</span></div>
+            <div class="info-item"><label>Status</label><span>${data.status || 'Pending'}</span></div>
+            <div class="info-item"><label>Title</label><span>${escapeHtml(title)}</span></div>
+            <div class="info-item"><label>Priority</label><span>${priorityValue}</span></div>
+            <div class="info-item"><label>Requester</label><span>${escapeHtml(requester)}</span></div>
             <div class="info-item"><label>Department</label><span>${escapeHtml(department)}</span></div>
-            <div class="info-item"><label>Email</label><span>${escapeHtml(data.emailId || data.email || '—')}</span></div>
-            <div class="info-item"><label>Contact No.</label><span>${escapeHtml(data.contactNo)}</span></div>
-            <div class="info-item"><label>Organization</label><span>${escapeHtml(data.organization || 'Radiant Appliances')}</span></div>
-            <div class="info-item"><label>Request Date</label><span>${data.requestDate || new Date().toLocaleDateString()}</span></div>
+            <div class="info-item"><label>Vendor</label><span>${escapeHtml(data.vendor || '—')}</span></div>
           </div>
-        </div>
-      </div>
-      
-      <div class="section">
-        <div class="section-title">🎯 Activity Details</div>
-        <div class="section-body">
-          <div class="info-grid">
-            <div class="info-item"><label>Title / Activity</label><span style="font-size: 16px; font-weight: 700;">${escapeHtml(title)}</span></div>
-            <div class="info-item"><label>Vendor / Supplier</label><span>${escapeHtml(data.vendor || data.vendorName || '—')}</span></div>
-            <div class="info-item"><label>Priority</label><span class="priority-badge">${priorityValue}</span></div>
-            <div class="info-item"><label>Status</label><span class="status-badge">${data.status || 'Pending'}</span></div>
-          </div>
-          ${data.purposeAndObjective || data.description ? `<p style="margin-top: 16px;"><strong>Purpose & Objective:</strong><br>${escapeHtml(data.purposeAndObjective || data.description)}</p>` : ''}
         </div>
       </div>
       
       <div class="amount-box">
-        <div class="amount-label">💰 Total Amount</div>
         <div class="amount-value">₹${Number(amount).toLocaleString('en-IN')}</div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Total Amount</div>
       </div>
       
       ${data.items && data.items.length > 0 ? `
       <div class="section">
-        <div class="section-title">📦 Request Items</div>
+        <div class="section-title">📦 Items</div>
         <div class="section-body" style="overflow-x: auto;">
           <table style="width: 100%;">
-            <thead><tr style="background: #f1f5f9;"><th>#</th><th>Part Code</th><th>Description</th><th>UOM</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
-            <tbody>${prItemsHtml}</tbody>
-            <tfoot><tr style="background: #f8fafc; font-weight: bold;"><td colspan="6" style="text-align: right;">Total Value:</td><td style="text-align: right;">₹${prTotalValue.toLocaleString('en-IN')}</td></tr></tfoot>
+            <thead><tr><th>#</th><th>Description</th><th>Part Code</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
+            <tbody>${itemsHtml}</tbody>
+            <tfoot><tr style="background: #f8fafc;"><td colspan="5" style="text-align: right;"><strong>Total Value:</strong></td><td><strong>₹${prTotalValue.toLocaleString('en-IN')}</strong></td></tr></tfoot>
           </table>
         </div>
-      </div>
-      ` : ''}
-      
-      ${data.stakeholders && data.stakeholders.length > 0 ? `
-      <div class="section">
-        <div class="section-title">👥 Approval Workflow</div>
-        <div class="section-body" style="overflow-x: auto;">
-          <table style="width: 100%;">
-            <thead><tr style="background: #f1f5f9;"><th>#</th><th>Line</th><th>Stakeholder</th><th>Designation</th><th>Email</th><th>Status</th><th>Remarks</th></tr></thead>
-            <tbody>${stakeholdersHtml}</tbody>
-          </table>
-        </div>
-      </div>
-      ` : ''}
-      
-      ${actor && actor.remarks ? `
-      <div class="section" style="background: #fef3c7; border-left: 4px solid #d97706;">
-        <div class="section-title">📝 Remarks</div>
-        <div class="section-body"><p style="margin: 0;">${escapeHtml(actor.remarks)}</p></div>
-      </div>
-      ` : ''}
-      
-      ${nextApprover ? `
-      <div class="section" style="background: #e0f2fe; border-left: 4px solid #0284c7;">
-        <div class="section-title">⏳ Next Approver</div>
-        <div class="section-body">
-          <p><strong>${escapeHtml(nextApprover.name || nextApprover.managerName)}</strong> (${escapeHtml(nextApprover.designation)})</p>
-          <p style="margin-top: 4px; font-size: 12px;">Email: ${escapeHtml(nextApprover.email)}</p>
-        </div>
-      </div>
-      ` : ''}
-      
-      ${(data.ccList || data.ccTo || []).length > 0 ? `
-      <div class="section">
-        <div class="section-title">📧 CC Recipients</div>
-        <div class="section-body"><div class="cc-chips">${ccHtml}</div></div>
-      </div>
-      ` : ''}
-      
-      ${needsApproval ? `
-      <div class="button-group">
-        <a href="${approveUrl}" class="btn-approve" style="color: white;">✅ Approve Request</a>
-        <a href="${approveUrl}" class="btn-reject" style="color: white;">❌ Reject Request</a>
       </div>
       ` : ''}
       
       <div style="text-align: center;">
-        <a href="${approveUrl}" class="btn-view">🔍 View Full Details in Dashboard</a>
+        <a href="${approveUrl}" class="btn">🔍 View in Dashboard</a>
       </div>
     </div>
-    
     <div class="footer">
-      <p style="margin: 0 0 8px;">This is an automated message from LCGC System</p>
-      <p style="margin: 0; font-size: 11px; color: #94a3b8;">© ${new Date().getFullYear()} LCGC. All rights reserved.</p>
-      <p style="margin-top: 8px; font-size: 10px;">Request ID: ${data._id || 'N/A'}</p>
+      <p>This is an automated message from LCGC System</p>
+      <p>© ${new Date().getFullYear()} LCGC. All rights reserved.</p>
     </div>
   </div>
 </body>
 </html>`;
-};
+}
 
-// ====================== MAIN SEND MAIL FUNCTION (NO PDF ATTACHMENTS) ======================
+// PO NPP Email Template
+function getPONppEmailHTML(data, action) {
+  const title = data.orderNo || data.titleOfActivity || 'PO Request';
+  const requester = data.purchaser || data.requesterName || 'User';
+  const department = data.department || '—';
+  const serialNo = data.uniqueSerialNo || '';
+  
+  const headerIcon = action === 'created' ? '📋' : action === 'approved' ? '✅' : action === 'rejected' ? '❌' : '⚠️';
+  const headerTitle = action === 'created' ? 'New PO Created' : action === 'approved' ? 'PO Approved' : action === 'rejected' ? 'PO Rejected' : 'Action Required';
+  
+  const baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:4200';
+  const approveUrl = `${baseUrl}/dashboard`;
+  
+  let poTotalValue = 0;
+  const itemsHtml = (data.items || []).map((item, idx) => {
+    const base = (item.qty || 0) * (item.unitPrice || 0);
+    const gst = base * ((item.cgst || 0) + (item.sgst || 0)) / 100;
+    const total = base + gst;
+    poTotalValue += total;
+    return `
+    <tr style="border-bottom: 1px solid #e2e8f0;">
+      <td style="padding: 8px;">${idx + 1}</td>
+      <td style="padding: 8px;"><strong>${escapeHtml(item.partDescription)}</strong></td>
+      <td style="padding: 8px;">${item.partCode || '—'}</td>
+      <td style="padding: 8px;">${item.qty || 0}</td>
+      <td style="padding: 8px;">₹${(item.unitPrice || 0).toLocaleString('en-IN')}</td>
+      <td style="padding: 8px;">₹${total.toLocaleString('en-IN')}</td>
+    </tr>`;
+  }).join('');
+  
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LCGC - ${escapeHtml(title)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; padding: 40px 20px; margin: 0; }
+    .container { max-width: 650px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e, #1e4a8a); padding: 40px; text-align: center; }
+    .header-icon { font-size: 48px; }
+    .header h1 { color: white; font-size: 28px; margin: 16px 0 8px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 0; }
+    .content { padding: 40px; }
+    .section { margin-bottom: 24px; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+    .section-title { background: #f8fafc; padding: 12px 20px; font-weight: 700; color: #0f2a5e; border-bottom: 1px solid #e2e8f0; }
+    .section-body { padding: 20px; }
+    .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .info-item label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; display: block; margin-bottom: 4px; }
+    .info-item span { font-size: 14px; color: #0f172a; font-weight: 500; }
+    .amount-box { background: linear-gradient(135deg, #e0e7ff, #c7d2fe); border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px; }
+    .amount-value { font-size: 32px; font-weight: 800; color: #1e40af; }
+    .serial-badge { display: inline-block; background: #eef2ff; color: #3730a3; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .btn { display: inline-block; padding: 12px 28px; background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; margin-top: 16px; }
+    .footer { background: #f8fafc; padding: 24px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
+    @media (max-width: 600px) { .content { padding: 24px; } .info-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-icon">${headerIcon}</div>
+      <h1>${headerTitle}</h1>
+      <p>Purchase Order ${action === 'created' ? 'Created' : action === 'approved' ? 'Approved' : 'Action Required'}</p>
+    </div>
+    <div class="content">
+      <div class="section">
+        <div class="section-title">📋 PO Information</div>
+        <div class="section-body">
+          <div class="info-grid">
+            <div class="info-item"><label>Serial Number</label><span class="serial-badge">${escapeHtml(serialNo)}</span></div>
+            <div class="info-item"><label>PO Number</label><span>${escapeHtml(data.orderNo || '—')}</span></div>
+            <div class="info-item"><label>Status</label><span>${data.status || 'Pending'}</span></div>
+            <div class="info-item"><label>Vendor</label><span>${escapeHtml(data.vendorName || '—')}</span></div>
+            <div class="info-item"><label>Requester</label><span>${escapeHtml(requester)}</span></div>
+            <div class="info-item"><label>Department</label><span>${escapeHtml(department)}</span></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="amount-box">
+        <div class="amount-value">₹${Number(poTotalValue).toLocaleString('en-IN')}</div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Grand Total (Incl. GST)</div>
+      </div>
+      
+      ${data.items && data.items.length > 0 ? `
+      <div class="section">
+        <div class="section-title">📦 Order Items</div>
+        <div class="section-body" style="overflow-x: auto;">
+          <table style="width: 100%;">
+            <thead><tr><th>#</th><th>Description</th><th>Part Code</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
+            <tbody>${itemsHtml}</tbody>
+            <tfoot><tr style="background: #f8fafc;"><td colspan="5" style="text-align: right;"><strong>Grand Total:</strong></td><td style="text-align: right;"><strong>₹${poTotalValue.toLocaleString('en-IN')}</strong></td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+      ` : ''}
+      
+      <div style="text-align: center;">
+        <a href="${approveUrl}" class="btn">🔍 View in Dashboard</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message from LCGC System</p>
+      <p>© ${new Date().getFullYear()} LCGC. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// Payment NPP Email Template
+function getPaymentNppEmailHTML(data, action) {
+  const title = data.titleOfActivity || data.paymentTo || 'Payment Request';
+  const requester = data.requesterName || 'User';
+  const department = data.department || '—';
+  const amount = data.amount || Number(data.expenseAmount) || 0;
+  const serialNo = data.uniqueSerialNo || '';
+  
+  const headerIcon = action === 'created' ? '📋' : action === 'approved' ? '✅' : action === 'rejected' ? '❌' : '⚠️';
+  const headerTitle = action === 'created' ? 'New Payment Advice Created' : action === 'approved' ? 'Payment Advice Approved' : action === 'rejected' ? 'Payment Advice Rejected' : 'Action Required';
+  
+  const baseUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:4200';
+  const approveUrl = `${baseUrl}/dashboard`;
+  
+  let invoiceTotal = 0;
+  const invoicesHtml = (data.invoices || []).map((inv, idx) => {
+    invoiceTotal += (inv.invoiceValue || 0);
+    return `
+    <tr style="border-bottom: 1px solid #e2e8f0;">
+      <td style="padding: 8px;">${idx + 1}</td>
+      <td style="padding: 8px;">${escapeHtml(inv.invoiceNo || '—')}</td>
+      <td style="padding: 8px;">${inv.invoiceDate || '—'}</td>
+      <td style="padding: 8px;">₹${(inv.invoiceValue || 0).toLocaleString('en-IN')}</td>
+    </tr>`;
+  }).join('');
+  
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LCGC - ${escapeHtml(title)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; padding: 40px 20px; margin: 0; }
+    .container { max-width: 650px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e, #1e4a8a); padding: 40px; text-align: center; }
+    .header-icon { font-size: 48px; }
+    .header h1 { color: white; font-size: 28px; margin: 16px 0 8px; }
+    .header p { color: rgba(255,255,255,0.9); margin: 0; }
+    .content { padding: 40px; }
+    .section { margin-bottom: 24px; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+    .section-title { background: #f8fafc; padding: 12px 20px; font-weight: 700; color: #0f2a5e; border-bottom: 1px solid #e2e8f0; }
+    .section-body { padding: 20px; }
+    .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .info-item label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; display: block; margin-bottom: 4px; }
+    .info-item span { font-size: 14px; color: #0f172a; font-weight: 500; }
+    .amount-box { background: linear-gradient(135deg, #e0e7ff, #c7d2fe); border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px; }
+    .amount-value { font-size: 32px; font-weight: 800; color: #1e40af; }
+    .serial-badge { display: inline-block; background: #eef2ff; color: #3730a3; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .btn { display: inline-block; padding: 12px 28px; background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; text-decoration: none; border-radius: 40px; font-weight: 600; margin-top: 16px; }
+    .footer { background: #f8fafc; padding: 24px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
+    @media (max-width: 600px) { .content { padding: 24px; } .info-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="header-icon">${headerIcon}</div>
+      <h1>${headerTitle}</h1>
+      <p>Payment Advice ${action === 'created' ? 'Submitted' : action === 'approved' ? 'Approved' : 'Action Required'}</p>
+    </div>
+    <div class="content">
+      <div class="section">
+        <div class="section-title">💰 Payment Information</div>
+        <div class="section-body">
+          <div class="info-grid">
+            <div class="info-item"><label>Serial Number</label><span class="serial-badge">${escapeHtml(serialNo)}</span></div>
+            <div class="info-item"><label>Status</label><span>${data.status || 'Pending'}</span></div>
+            <div class="info-item"><label>Payment To</label><span>${escapeHtml(data.paymentTo || '—')}</span></div>
+            <div class="info-item"><label>Requester</label><span>${escapeHtml(requester)}</span></div>
+            <div class="info-item"><label>Department</label><span>${escapeHtml(department)}</span></div>
+            <div class="info-item"><label>Bank Details</label><span>${escapeHtml(data.bankDetails || '—')}</span></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="amount-box">
+        <div class="amount-value">₹${Number(amount).toLocaleString('en-IN')}</div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Payment Amount</div>
+      </div>
+      
+      ${data.invoices && data.invoices.length > 0 ? `
+      <div class="section">
+        <div class="section-title">📄 Invoices</div>
+        <div class="section-body" style="overflow-x: auto;">
+          <table style="width: 100%;">
+            <thead><tr><th>#</th><th>Invoice No.</th><th>Date</th><th>Value</th></tr></thead>
+            <tbody>${invoicesHtml}</tbody>
+            <tfoot><tr style="background: #f8fafc;"><td colspan="3" style="text-align: right;"><strong>Total:</strong></td><td style="text-align: right;"><strong>₹${invoiceTotal.toLocaleString('en-IN')}</strong></td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+      ` : ''}
+      
+      <div style="text-align: center;">
+        <a href="${approveUrl}" class="btn">🔍 View in Dashboard</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message from LCGC System</p>
+      <p>© ${new Date().getFullYear()} LCGC. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// Approval Status Email Template
+function getApprovalEmailHTML(data, type, action, comments) {
+  const title = data.title || data.titleOfActivity || 'Request';
+  const requester = data.requester || data.requesterName || 'User';
+  const serialNo = data.uniqueSerialNo || data._id || '';
+  
+  const statusColor = action === 'Approved' ? '#10b981' : '#ef4444';
+  const statusText = action === 'Approved' ? '✅ APPROVED' : '❌ REJECTED';
+  
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>LCGC - ${escapeHtml(title)}</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background: #f4f7fc; }
+    .container { max-width: 600px; margin: 20px auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #0f2a5e, #1e4a8a); color: white; padding: 30px; text-align: center; }
+    .header h1 { margin: 0; font-size: 24px; }
+    .status-badge { display: inline-block; padding: 8px 20px; border-radius: 30px; font-weight: bold; margin-top: 15px; background: ${statusColor}; color: white; }
+    .content { padding: 30px; }
+    .info-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    .info-table td { padding: 12px; border-bottom: 1px solid #e2e8f0; }
+    .info-table td:first-child { font-weight: bold; width: 40%; color: #475569; }
+    .info-table td:last-child { color: #1e293b; }
+    .comments-box { background: #f8fafc; padding: 16px; border-radius: 12px; margin-top: 20px; border-left: 4px solid ${statusColor}; }
+    .footer { background: #f1f5f9; padding: 20px; text-align: center; font-size: 12px; color: #64748b; }
+    .btn { display: inline-block; padding: 12px 24px; background: #0f2a5e; color: white; text-decoration: none; border-radius: 8px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>LCGC System</h1>
+      <div class="status-badge">${statusText}</div>
+    </div>
+    <div class="content">
+      <h2>${type.toUpperCase()} Request ${action}</h2>
+      <table class="info-table">
+        <tr><td>Serial Number</td><td>${escapeHtml(serialNo)}</td></tr>
+        <tr><td>Title</td><td>${escapeHtml(title)}</td></tr>
+        <tr><td>Requester</td><td>${escapeHtml(requester)}</td></tr>
+      </table>
+      ${comments ? `<div class="comments-box"><strong>📝 Comments:</strong><br>${escapeHtml(comments)}</div>` : ''}
+      <div style="text-align: center;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:4200'}/dashboard" class="btn">View in Dashboard</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This is an automated message from LCGC System</p>
+      <p>© ${new Date().getFullYear()} LCGC. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// Main send mail function
 async function sendMail(opts) {
-  const { to, cc, bcc, subject, html, text, rfqData, epRequestData, prRequestData, poRequestData, paymentRequestData, action, actor, nextApprover, attachments } = opts;
+  const { to, cc, bcc, subject, html, text, attachments, type, action, data, comments } = opts;
   
   const toList = (Array.isArray(to) ? to : [to]).filter(Boolean);
   const ccList = cc ? (Array.isArray(cc) ? cc : [cc]).filter(Boolean) : [];
+  const bccList = bcc ? (Array.isArray(bcc) ? bcc : [bcc]).filter(Boolean) : [];
   
-  if (toList.length === 0 && ccList.length === 0) {
+  if (toList.length === 0 && ccList.length === 0 && bccList.length === 0) {
     console.error('❌ No recipients specified');
     return { success: false, error: 'No recipients specified' };
   }
 
-  let requestData = rfqData || epRequestData || prRequestData || poRequestData || paymentRequestData;
-  
   let finalHtml = html;
-  if (!html && requestData) {
-    finalHtml = getSimpleEmailHTML(requestData, action || 'created', action, actor, nextApprover);
-  } else if (!html) {
-    finalHtml = `<html><body><p>${text || subject}</p></body></html>`;
+  let finalText = text;
+  
+  if (!finalHtml && data) {
+    if (type === 'otp') {
+      finalHtml = getOTPEmailHTML(data.name || data.email?.split('@')[0] || 'User', data.otp, data.otpType || 'login');
+    } else if (type === 'email_verification') {
+      finalHtml = getEmailVerificationLinkHTML(data.name, data.verificationLink);
+    } else if (type === 'welcome') {
+      finalHtml = getWelcomeEmailHTML(data.name);
+    } else if (type === 'rfq') {
+      finalHtml = getRFQEmailHTML(data, action || 'created');
+    } else if (type === 'ep') {
+      finalHtml = getEPEmailHTML(data, action || 'created');
+    } else if (type === 'pr') {
+      finalHtml = getPRNppEmailHTML(data, action || 'created');
+    } else if (type === 'po') {
+      finalHtml = getPONppEmailHTML(data, action || 'created');
+    } else if (type === 'payment') {
+      finalHtml = getPaymentNppEmailHTML(data, action || 'created');
+    } else if (type === 'approval') {
+      finalHtml = getApprovalEmailHTML(data, data.requestType || 'request', action || 'Approved', comments);
+    }
+  }
+
+  if (!finalHtml) {
+    finalHtml = `<html><body><h2>${subject}</h2><p>${finalText || 'No content available'}</p></body></html>`;
   }
 
   const from = getFromAddress();
+  const fromName = getFromName();
 
-  // Try Resend first
-  if (process.env.RESEND_API_KEY) {
-    try {
-      if (!resendClient) resendClient = new Resend(process.env.RESEND_API_KEY);
-      
-      const payload = {
-        from: from,
-        to: toList,
-        subject: subject,
-        html: finalHtml,
-      };
-      
-      if (ccList.length > 0) {
-        payload.cc = ccList;
-      }
-      
-      // Skip attachments for now to avoid errors
-      // Attachments can be added later with proper buffer handling
-      
-      console.log(`📧 Sending email via Resend to: ${toList.join(', ')}`);
-      const { data, error } = await resendClient.emails.send(payload);
-      
-      if (error) {
-        console.error('❌ Resend error:', error);
-        // Fall back to console log
-        console.log('📧 Email would be sent to:', { to: toList, cc: ccList, subject });
-        return { success: true, method: 'console', message: 'Email logged to console (Resend failed)' };
-      }
-      
-      console.log(`✅ Email sent successfully via Resend! ID: ${data?.id}`);
-      return { success: true, via: 'resend', id: data?.id };
-      
-    } catch (e) {
-      console.error('❌ Resend error:', e.message);
-      // Fall back to console log
-      console.log('📧 Email content (Resend error):', { to: toList, cc: ccList, subject });
-      return { success: true, method: 'console', message: 'Email logged to console' };
-    }
-  } 
+  const mailOptions = {
+    from: `"${fromName}" <${from}>`,
+    to: toList.join(', '),
+    subject: subject,
+    html: finalHtml,
+  };
   
-  // Fallback: Just log the email to console for development
+  if (finalText) mailOptions.text = finalText;
+  if (ccList.length > 0) mailOptions.cc = ccList.join(', ');
+  if (bccList.length > 0) mailOptions.bcc = bccList.join(', ');
+  if (attachments && attachments.length > 0) mailOptions.attachments = attachments;
+
+  const smtpTransporter = getSMTPTransporter();
+  
+  if (smtpTransporter && process.env.SMTP_ENABLED === 'true') {
+    try {
+      console.log(`📧 Sending email via SMTP to: ${toList.join(', ')}`);
+      const info = await smtpTransporter.sendMail(mailOptions);
+      console.log(`✅ Email sent! Message ID: ${info.messageId}`);
+      return { success: true, via: 'smtp', messageId: info.messageId };
+    } catch (error) {
+      console.error('❌ SMTP error:', error.message);
+      
+      if (process.env.RESEND_API_KEY) {
+        try {
+          if (!resendClient) resendClient = new Resend(process.env.RESEND_API_KEY);
+          
+          const resendPayload = {
+            from: `${fromName} <${from}>`,
+            to: toList,
+            subject: subject,
+            html: finalHtml,
+          };
+          
+          if (ccList.length > 0) resendPayload.cc = ccList;
+          if (bccList.length > 0) resendPayload.bcc = bccList;
+          if (attachments && attachments.length > 0) resendPayload.attachments = attachments;
+          
+          const { data: resendData, error: resendError } = await resendClient.emails.send(resendPayload);
+          
+          if (resendError) {
+            console.error('❌ Resend error:', resendError);
+            return { success: false, error: resendError.message };
+          }
+          
+          console.log(`✅ Email sent via Resend! ID: ${resendData?.id}`);
+          return { success: true, via: 'resend', id: resendData?.id };
+        } catch (resendErr) {
+          console.error('❌ Resend fallback error:', resendErr.message);
+        }
+      }
+      
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // Fallback: Log to console
+  console.warn('⚠️ No email provider configured. Logging to console.');
   console.log('='.repeat(80));
   console.log('📧 EMAIL NOTIFICATION');
   console.log('='.repeat(80));
   console.log(`TO: ${toList.join(', ')}`);
   if (ccList.length > 0) console.log(`CC: ${ccList.join(', ')}`);
+  if (bccList.length > 0) console.log(`BCC: ${bccList.join(', ')}`);
   console.log(`SUBJECT: ${subject}`);
-  console.log(`ACTION: ${action || 'created'}`);
-  console.log(`REQUEST TYPE: ${requestData?.source || 'EP'}`);
+  console.log(`TYPE: ${type || 'general'}`);
+  if (data) console.log(`DATA:`, JSON.stringify(data, null, 2));
   console.log('='.repeat(80));
   
   return { success: true, method: 'console', message: 'Email logged to console' };
 }
 
-module.exports = { sendMail, getFromAddress };
+module.exports = { 
+  sendMail, 
+  getFromAddress, 
+  getOTPEmailHTML, 
+  getEmailVerificationLinkHTML,
+  getWelcomeEmailHTML,
+  getRFQEmailHTML, 
+  getEPEmailHTML,
+  getPRNppEmailHTML,
+  getPONppEmailHTML,
+  getPaymentNppEmailHTML,
+  getApprovalEmailHTML
+};

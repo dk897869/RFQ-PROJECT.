@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
-// Check if model already exists to prevent overwrite error
 const userSchema = new mongoose.Schema({
   name: { 
     type: String, 
@@ -65,12 +64,22 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  avatar: {
+    type: String,
+    default: ''
+  },
   workspaces: {
     type: [String],
     default: []
   },
   resetPasswordToken: { type: String, select: false },
   resetPasswordExpire: { type: Date, select: false },
+  emailVerified: { 
+    type: Boolean, 
+    default: false 
+  },
+  emailVerificationToken: { type: String },
+  emailVerificationExpire: { type: Date },
   lastLogin: { 
     type: Date 
   },
@@ -78,6 +87,9 @@ const userSchema = new mongoose.Schema({
     type: Boolean, 
     default: true 
   },
+  googleId: { type: String, unique: true, sparse: true },
+  facebookId: { type: String, unique: true, sparse: true },
+  twitterId: { type: String, unique: true, sparse: true },
   rights: {
     epApproval: { type: Boolean, default: false },
     vendors: { type: Boolean, default: false },
@@ -151,24 +163,22 @@ userSchema.virtual('profile').get(function() {
     contactNo: this.contactNo,
     organization: this.organization,
     age: this.age,
-    isBirthdayToday: this.isBirthdayToday
+    isBirthdayToday: this.isBirthdayToday,
+    emailVerified: this.emailVerified
   };
 });
 
-// Hash password before saving - FIXED
+// Hash password before saving
 userSchema.pre('save', async function(next) {
   try {
-    // Only hash if password is modified and exists
     if (!this.isModified('password')) {
       return next();
     }
     
-    // Check if password is already hashed (starts with $2a$ or $2b$)
     if (this.password && (this.password.startsWith('$2a$') || this.password.startsWith('$2b$'))) {
       return next();
     }
     
-    // Hash the password
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
     next();
@@ -183,7 +193,7 @@ userSchema.methods.comparePassword = async function(password) {
   return await bcrypt.compare(password, this.password);
 };
 
-// Update password method (for password reset)
+// Update password method
 userSchema.methods.updatePassword = async function(newPassword) {
   this.password = newPassword;
   return await this.save();
@@ -237,7 +247,6 @@ userSchema.statics.getStats = async function() {
   return { total, active, admin, manager, user };
 };
 
-// Check if model already exists before creating
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
 module.exports = User;

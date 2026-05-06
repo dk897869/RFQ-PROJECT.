@@ -1,6 +1,72 @@
 const RFQ = require('../models/Rfq');
 const { sendMail } = require('../services/mail.service');
-const { generateBeautifulPDF } = require('../services/mail.service');
+const { generateBeautifulPDF } = require('../services/pdf.service');
+
+// Generate unique serial number
+const generateSerialNumber = () => {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  const seconds = date.getSeconds().toString().padStart(2, '0');
+  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+  return `RFQ-${year}${month}${day}${hours}${minutes}${seconds}-${random}`;
+};
+
+// Send RFQ Created Email with PDF
+const sendRFQCreatedEmail = async (rfqData) => {
+  const subject = `📋 New RFQ Created: ${rfqData.titleOfActivity} (${rfqData.uniqueSerialNo})`;
+  
+  console.log(`📧 Sending RFQ creation email to: ${rfqData.emailId}`);
+  console.log(`📧 CC recipients: ${rfqData.ccTo?.join(', ') || 'None'}`);
+  
+  // Generate PDF
+  let pdfBuffer = null;
+  try {
+    pdfBuffer = await generateBeautifulPDF(rfqData);
+    console.log('📄 PDF generated successfully');
+  } catch (pdfErr) {
+    console.error('PDF generation error:', pdfErr.message);
+  }
+  
+  // Send to requester with CC
+  const attachments = pdfBuffer ? [{
+    filename: `RFQ_${rfqData.uniqueSerialNo}.pdf`,
+    content: pdfBuffer.toString('base64'),
+    contentType: 'application/pdf'
+  }] : [];
+  
+  await sendMail({
+    to: rfqData.emailId,
+    cc: rfqData.ccTo || [],
+    subject: subject,
+    rfqData: rfqData,
+    action: 'created',
+    actor: null,
+    nextApprover: rfqData.stakeholders?.[0] || null,
+    attachments: attachments
+  });
+  
+  // Send to all stakeholders (approvers)
+  if (rfqData.stakeholders && rfqData.stakeholders.length > 0) {
+    for (const approver of rfqData.stakeholders) {
+      if (approver.email && approver.email !== rfqData.emailId) {
+        await sendMail({
+          to: approver.email,
+          subject: `🔔 Approval Required: ${rfqData.titleOfActivity} (${rfqData.uniqueSerialNo})`,
+          rfqData: rfqData,
+          action: 'approval_needed',
+          actor: { name: rfqData.requesterName },
+          nextApprover: null,
+          attachments: attachments
+        });
+        console.log(`📧 Approval request sent to: ${approver.email}`);
+      }
+    }
+  }
+};
 
 // Get all RFQs
 const getAllRFQs = async (req, res) => {
@@ -35,119 +101,116 @@ const createRFQ = async (req, res) => {
       contactNo,
       requestDate,
       organization,
-      approvalFor,
       priority,
       purposeAndObjective,
-      ccTo
+      ccTo,
+      stakeholders
     } = req.body;
 
-    // Handle items if sent as string
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      if (req.body.itemsJson) {
-        try {
-          items = JSON.parse(req.body.itemsJson);
-        } catch (e) {
-          console.error("Failed to parse itemsJson:", e);
-        }
-      }
-      
-      if (!items && req.body.itemDescription) {
-        items = [{
-          itemDescription: req.body.itemDescription,
-          uom: req.body.uom || 'Pcs',
-          quantity: parseInt(req.body.quantity) || 1,
-          make: req.body.make || '',
-          alternativeSimilar: req.body.alternativeSimilar || '',
-          pictureExistingVendorReference: req.body.pictureExistingVendorReference || '',
-          remark: req.body.remark || ''
-        }];
-      }
-    }
-
-    // Validation
+    // Validate required fields
     if (!titleOfActivity) {
       return res.status(400).json({
         success: false,
-        message: "titleOfActivity is required",
-        receivedData: req.body
+        message: "titleOfActivity is required"
       });
     }
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
+    if (!requesterName) {
       return res.status(400).json({
         success: false,
-        message: "At least one item is required",
-        receivedItems: items,
-        receivedBody: req.body
+        message: "requesterName is required"
       });
     }
 
-    // Validate each item
-    for (let i = 0; i < items.length; i++) {
-      if (!items[i].itemDescription) {
-        return res.status(400).json({
-          success: false,
-          message: `Item ${i + 1} missing itemDescription`,
-          item: items[i]
-        });
-      }
-      if (!items[i].quantity || items[i].quantity < 1) {
-        return res.status(400).json({
-          success: false,
-          message: `Item ${i + 1} must have quantity >= 1`,
-          item: items[i]
-        });
-      }
+    if (!emailId) {
+      return res.status(400).json({
+        success: false,
+        message: "emailId is required"
+      });
     }
 
+    // Process items
+    let processedItems = [];
+    if (items && Array.isArray(items)) {
+      processedItems = items.map(item => ({
+        itemDescription: item.itemDescription || item.description || '',
+        uom: item.uom || 'Pcs',
+        quantity: item.quantity || item.qty || 1,
+        make: item.make || '',
+        alternativeSimilar: item.alternativeSimilar || item.altSimilar || '',
+        pictureExistingVendorReference: item.pictureExistingVendorReference || item.vendorRef || '',
+        remark: item.remark || '',
+        pictureName: item.pictureName || '',
+        picturePreview: item.picturePreview || ''
+      })).filter(item => item.itemDescription);
+    }
+
+    if (processedItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one valid item is required"
+      });
+    }
+
+    // Process stakeholders
+    let processedStakeholders = [];
+    if (stakeholders && Array.isArray(stakeholders)) {
+      processedStakeholders = stakeholders.map(s => ({
+        line: s.line || 'Parallel',
+        managerName: s.managerName || '',
+        email: s.email || '',
+        designation: s.designation || '',
+        status: 'Pending',
+        remarks: s.remarks || ''
+      })).filter(s => s.email);
+    }
+
+    // Generate unique serial number
+    const uniqueSerialNo = generateSerialNumber();
+    console.log(`📋 Generated RFQ Serial Number: ${uniqueSerialNo}`);
+
     const rfqData = {
-      requesterName: requesterName || 'Chandra Shekhar',
+      uniqueSerialNo: uniqueSerialNo,
+      requesterName: requesterName,
       department: department || 'Purchase',
-      emailId: emailId || 'chandrashekhar@radiantappliances.com',
-      contactNo: contactNo || '8806668006',
-      requestDate: requestDate || new Date(),
-      organization: organization || 'Radaint',
+      emailId: emailId,
+      contactNo: contactNo || '',
+      requestDate: requestDate || new Date().toISOString().split('T')[0],
+      organization: organization || 'Radiant Appliances',
       titleOfActivity: titleOfActivity,
-      approvalFor: approvalFor || 'Operational Support and Action plan',
-      priority: priority || 'H',
       purposeAndObjective: purposeAndObjective || '',
-      items: items,
+      priority: priority === 'High' ? 'H' : priority === 'Low' ? 'L' : 'M',
+      items: processedItems,
+      stakeholders: processedStakeholders,
       ccTo: ccTo || [],
-      status: 'In-Process'
+      status: 'Pending'
     };
 
     const newRFQ = new RFQ(rfqData);
     const savedRFQ = await newRFQ.save();
 
     console.log("✅ RFQ saved successfully:", savedRFQ._id);
+    console.log(`📋 RFQ Serial Number: ${savedRFQ.uniqueSerialNo}`);
 
-    // Send email notification
+    // Send emails with PDF attachment
     try {
-      await sendMail({
-        to: savedRFQ.emailId,
-        cc: savedRFQ.ccTo?.length ? savedRFQ.ccTo : undefined,
-        subject: `📋 RFQ Created: ${savedRFQ.titleOfActivity}`,
-        rfqData: savedRFQ,
-        action: 'created',
-        actor: null,
-        nextApprover: null
-      });
-      console.log("📧 Email sent successfully");
-    } catch (mailErr) {
-      console.error('Email sending error:', mailErr.message);
+      await sendRFQCreatedEmail(savedRFQ);
+      console.log("📧 RFQ creation emails sent successfully");
+    } catch (emailErr) {
+      console.error('⚠️ Email sending error:', emailErr.message);
     }
 
     res.status(201).json({
       success: true,
       message: 'RFQ created successfully',
-      data: savedRFQ,
+      serialNumber: savedRFQ.uniqueSerialNo,
+      data: savedRFQ
     });
   } catch (err) {
     console.error("❌ Error in createRFQ:", err);
     res.status(400).json({ 
       success: false, 
-      message: err.message || "Failed to create RFQ",
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      message: err.message || "Failed to create RFQ"
     });
   }
 };
@@ -233,11 +296,12 @@ const deleteRFQ = async (req, res) => {
   }
 };
 
-// ✅ ADD THIS - Approve RFQ
+// Approve RFQ
 const approveRFQ = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    const userName = req.user?.name || 'Approver';
     
     const rfq = await RFQ.findById(id);
     
@@ -248,29 +312,39 @@ const approveRFQ = async (req, res) => {
       });
     }
     
-    // Update status
     rfq.status = 'Approved';
     if (comments) {
       rfq.approvalComments = comments;
     }
     rfq.approvedAt = new Date();
-    rfq.approvedBy = req.user?.id || 'System';
+    rfq.approvedBy = userName;
     
     await rfq.save();
     
-    // Send approval email
+    // Send approval email with PDF
+    let pdfBuffer = null;
     try {
-      await sendMail({
-        to: rfq.emailId,
-        cc: rfq.ccTo?.length ? rfq.ccTo : undefined,
-        subject: `✅ RFQ Approved: ${rfq.titleOfActivity}`,
-        rfqData: rfq,
-        action: 'approved',
-        actor: { name: req.user?.name || 'Approver', remarks: comments }
-      });
-    } catch (mailErr) {
-      console.error('Approval email error:', mailErr.message);
+      pdfBuffer = await generateBeautifulPDF(rfq);
+    } catch (pdfErr) {
+      console.error('PDF generation error:', pdfErr.message);
     }
+    
+    const attachments = pdfBuffer ? [{
+      filename: `RFQ_${rfq.uniqueSerialNo}.pdf`,
+      content: pdfBuffer.toString('base64'),
+      contentType: 'application/pdf'
+    }] : [];
+    
+    await sendMail({
+      to: rfq.emailId,
+      cc: rfq.ccTo || [],
+      subject: `✅ RFQ Approved: ${rfq.titleOfActivity} (${rfq.uniqueSerialNo})`,
+      rfqData: rfq,
+      action: 'approved',
+      actor: { name: userName, remarks: comments },
+      nextApprover: null,
+      attachments: attachments
+    });
     
     res.status(200).json({
       success: true,
@@ -286,11 +360,12 @@ const approveRFQ = async (req, res) => {
   }
 };
 
-// ✅ ADD THIS - Reject RFQ
+// Reject RFQ
 const rejectRFQ = async (req, res) => {
   try {
     const { id } = req.params;
     const { comments } = req.body;
+    const userName = req.user?.name || 'Rejecter';
     
     const rfq = await RFQ.findById(id);
     
@@ -301,29 +376,39 @@ const rejectRFQ = async (req, res) => {
       });
     }
     
-    // Update status
     rfq.status = 'Rejected';
     if (comments) {
       rfq.rejectionComments = comments;
     }
     rfq.rejectedAt = new Date();
-    rfq.rejectedBy = req.user?.id || 'System';
+    rfq.rejectedBy = userName;
     
     await rfq.save();
     
-    // Send rejection email
+    // Send rejection email with PDF
+    let pdfBuffer = null;
     try {
-      await sendMail({
-        to: rfq.emailId,
-        cc: rfq.ccTo?.length ? rfq.ccTo : undefined,
-        subject: `❌ RFQ Rejected: ${rfq.titleOfActivity}`,
-        rfqData: rfq,
-        action: 'rejected',
-        actor: { name: req.user?.name || 'Approver', remarks: comments }
-      });
-    } catch (mailErr) {
-      console.error('Rejection email error:', mailErr.message);
+      pdfBuffer = await generateBeautifulPDF(rfq);
+    } catch (pdfErr) {
+      console.error('PDF generation error:', pdfErr.message);
     }
+    
+    const attachments = pdfBuffer ? [{
+      filename: `RFQ_${rfq.uniqueSerialNo}.pdf`,
+      content: pdfBuffer.toString('base64'),
+      contentType: 'application/pdf'
+    }] : [];
+    
+    await sendMail({
+      to: rfq.emailId,
+      cc: rfq.ccTo || [],
+      subject: `❌ RFQ Rejected: ${rfq.titleOfActivity} (${rfq.uniqueSerialNo})`,
+      rfqData: rfq,
+      action: 'rejected',
+      actor: { name: userName, remarks: comments },
+      nextApprover: null,
+      attachments: attachments
+    });
     
     res.status(200).json({
       success: true,
@@ -357,13 +442,7 @@ const getDepartments = (req, res) => {
   res.status(200).json({
     success: true,
     departments: [
-      'Purchase',
-      'Production',
-      'Quality',
-      'Logistics',
-      'Maintenance',
-      'HR',
-      'Stores'
+      'Purchase', 'Production', 'Quality', 'Logistics', 'Maintenance', 'HR', 'Stores', 'IT', 'Finance', 'R&D', 'Operations', 'Sales'
     ]
   });
 };
@@ -374,8 +453,8 @@ module.exports = {
   getRFQById,
   updateRFQ,
   deleteRFQ,
-  approveRFQ,     // ✅ Export approve
-  rejectRFQ,      // ✅ Export reject
+  approveRFQ,
+  rejectRFQ,
   getVendors,
   getDepartments
 };
